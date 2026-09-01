@@ -8,15 +8,15 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 VERSION=0.20.0
-COMMIT=07da945c214481083049500bd29f45cabc5a04b2
+COMMIT=3c27eb6234bf91b8ceee9e9071591b31e9b148cb
 SOURCE=${HERMES_SOURCE_DIR:-}
 if [ -z "$SOURCE" ]; then
   echo "Set HERMES_SOURCE_DIR to a Hermes Agent ${VERSION} checkout (commit ${COMMIT})." >&2
   echo "Do not rely on a maintainer-specific absolute path." >&2
   exit 2
 fi
-UV_LOCK_SHA=47fe30d267657c0912c907ba443c29dd7cf21246ca922b6b665f74c2d18a6802
-SOURCE_TREE_SHA=33a31bf7a6d0eb64ccb4d45051d13baba2a3cf43c1345491383c9ea976b0ab61
+UV_LOCK_SHA=aab3c83f71b683507a590b6315b23bdc0abd6b63b76b2349eae15bf00dfbaf2b
+SOURCE_TREE_SHA=f77a9ad5a12698e9d87605a97d7d12ccadc4eb3781131c580b527d23d3dd81b9
 
 is_windows_host() {
   case "$(uname -s)" in

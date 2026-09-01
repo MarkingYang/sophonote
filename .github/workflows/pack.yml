@@ -15,16 +15,16 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: NousResearch/hermes-agent
-          ref: 07da945c214481083049500bd29f45cabc5a04b2
+          ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
           path: .hermes-src
       - uses: pnpm/action-setup@v4
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -36,7 +36,7 @@ jobs:
         env:
           HERMES_SOURCE_DIR: ${{ github.workspace }}/.hermes-src
         run: pnpm pack:macos
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sophonote-macos-aarch64-unsigned
           path: |
@@ -52,16 +52,16 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: NousResearch/hermes-agent
-          ref: 07da945c214481083049500bd29f45cabc5a04b2
+          ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
           path: .hermes-src
       - uses: pnpm/action-setup@v4
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -75,7 +75,7 @@ jobs:
         env:
           HERMES_SOURCE_DIR: ${{ github.workspace }}/.hermes-src
         run: pnpm pack:windows
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sophonote-windows-x64-unsigned
           path: |
@@ -91,7 +91,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sophonote-macos-aarch64-unsigned
           path: release/macos
@@ -106,6 +106,7 @@ jobs:
           fi
 
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --prerelease --repo "$GITHUB_REPOSITORY"
             gh release upload "$GITHUB_REF_NAME" "${release_files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" "${release_files[@]}" \
@@ -126,7 +127,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sophonote-windows-x64-unsigned
           path: release/windows
