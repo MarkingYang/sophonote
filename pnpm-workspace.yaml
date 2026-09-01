@@ -1,3 +1,6 @@
+packages:
+  - "."
+
 allowBuilds:
   # esbuild 的构建脚本只校验平台二进制（本体经 optionalDependencies 安装），批准
   esbuild: true

@@ -21,7 +21,7 @@ jobs:
           repository: NousResearch/hermes-agent
           ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
           path: .hermes-src
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
       - uses: actions/setup-node@v7
@@ -58,7 +58,7 @@ jobs:
           repository: NousResearch/hermes-agent
           ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
           path: .hermes-src
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
       - uses: actions/setup-node@v7
