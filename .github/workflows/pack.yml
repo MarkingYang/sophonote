@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
   macos-apple-silicon:
     name: macOS Apple Silicon pack
@@ -79,3 +82,61 @@ jobs:
             src-tauri/target/release/bundle/nsis/*
             src-tauri/target/release/pack-evidence/**
           if-no-files-found: error
+
+  publish-macos-preview:
+    name: Publish macOS community preview
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos-apple-silicon
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sophonote-macos-aarch64-unsigned
+          path: release/macos
+      - name: Create or update macOS prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t release_files < <(find release/macos -type f -name '*.dmg' -print)
+          if [[ ${#release_files[@]} -eq 0 ]]; then
+            echo "No DMG files were downloaded."
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${release_files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" "${release_files[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --prerelease \
+              --title "SophoNote $GITHUB_REF_NAME Community Preview" \
+              --notes "Unsigned community preview for testing. macOS is not notarized and Windows is not Authenticode-signed; review the repository documentation before installing."
+          fi
+
+  publish-windows-preview:
+    name: Add Windows community preview
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - windows-x64
+      - publish-macos-preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sophonote-windows-x64-unsigned
+          path: release/windows
+      - name: Upload Windows installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t release_files < <(find release/windows -type f -name '*.exe' -print)
+          if [[ ${#release_files[@]} -eq 0 ]]; then
+            echo "No NSIS files were downloaded."
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${release_files[@]}" --clobber --repo "$GITHUB_REPOSITORY"

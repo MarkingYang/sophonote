@@ -54,6 +54,16 @@ cargo test --all-targets
 
 On a real Hermes path, `logs/dev.log` should show `resolve=Use(Hermes)` and `surface=gateway`. Acceptance must cover session create/resume, Skills, attachments, approval/clarify, cancel, and a final answer. A reachable port is not enough.
 
+## Website
+
+The public website lives in `website/` and is maintained with the client in this repository. It is a dependency-free static site; preview it from the repository root:
+
+```bash
+pnpm website:dev
+```
+
+Keep marketing claims aligned with the PRD, architecture, and ledger. Pushes to `main` that touch `website/` deploy through GitHub Pages. `website/CNAME` declares `sophonote.com`, and the download action resolves the latest public DMG from this repository's GitHub Releases rather than storing an installer in the site tree.
+
 ## Pull requests
 
 1. Branch from current `main`. Keep the change small.
@@ -155,7 +165,7 @@ pnpm pack:macos     # macOS only
 pnpm pack:windows   # Windows only
 ```
 
-Official RC: `pnpm release:macos` or `pnpm release:windows`. GitHub Actions `pack.yml` produces unsigned packs only; it does not turn an artifact into an RC.
+Official RC: `pnpm release:macos` or `pnpm release:windows`. On version tags, GitHub Actions `pack.yml` publishes unsigned packs as a prerelease; a manual workflow run keeps them as Actions artifacts. Neither path turns an unsigned artifact into an RC.
 
 The macOS build script writes a Spotlight exclusion under `src-tauri/target/` and places the `.app` in `bundle.noindex/` when done. The install target is always `/Applications/SophoNote.app`:
 

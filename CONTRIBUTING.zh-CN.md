@@ -54,6 +54,16 @@ cargo test --all-targets
 
 Hermes 真链路成功时，`logs/dev.log` 应出现 `resolve=Use(Hermes)` 和 `surface=gateway`。验收必须覆盖 Session 创建/恢复、Skill、附件、审批/澄清、取消和最终答案，不能只测端口可连接。
 
+## 官网
+
+对外官网源码固定放在 `website/`，与客户端在同一仓库维护。它是无依赖静态站，从仓库根目录预览：
+
+```bash
+pnpm website:dev
+```
+
+宣传事实必须与 PRD、架构和台账一致。`main` 上涉及 `website/` 的提交通过 GitHub Pages 部署；`website/CNAME` 声明 `sophonote.com`，下载入口从本仓库 GitHub Releases 动态解析最新公开 DMG，不把安装包复制进网站目录。
+
 ## 提 PR
 
 1. 从当前 `main` 开分支，范围尽量小。
@@ -155,7 +165,7 @@ pnpm pack:macos     # 仅 macOS
 pnpm pack:windows   # 仅 Windows
 ```
 
-正式 RC：`pnpm release:macos` 或 `pnpm release:windows`。GitHub Actions `pack.yml` 只打 unsigned pack，不会让产物自动成为 RC。
+正式 RC：`pnpm release:macos` 或 `pnpm release:windows`。GitHub Actions `pack.yml` 在版本标签上把 unsigned pack 发布为 prerelease，手动运行则只保留 Actions artifact；两者都不会让无签名产物自动成为 RC。
 
 macOS 构建脚本会在 `src-tauri/target/` 写入 Spotlight 排除标记，并在构建完成后将 `.app` 放入 `bundle.noindex/`。安装目标始终是 `/Applications/SophoNote.app`：
 

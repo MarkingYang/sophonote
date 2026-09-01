@@ -2,6 +2,8 @@
 
 [English](./README.md) | **简体中文**
 
+官方网站：[sophonote.com](https://sophonote.com) · [GitHub Releases](https://github.com/MarkingYang/sophonote/releases)
+
 SophoNote 是围绕开源 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 构建的 macOS 本地优先 AI 知识工作台。笔记、发现、权限和文档审阅留在 SophoNote，Hermes 专注 Agent 运行时。它不是 Hermes Desktop 的分叉，也不复刻其界面。
 
 SophoNote 是钉扎 Hermes Sidecar 外围的 **Client Surface**：

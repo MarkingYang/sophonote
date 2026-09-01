@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "website:dev": "node website/server.mjs",
     "dev:log": "mkdir -p logs && tauri dev 2>&1 | tee -a logs/dev.log",
     "build": "tsc && vite build",
     "preview": "vite preview",

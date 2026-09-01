@@ -2,6 +2,8 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
+Official website: [sophonote.com](https://sophonote.com) · [GitHub Releases](https://github.com/MarkingYang/sophonote/releases)
+
 SophoNote is a local-first AI knowledge workbench for macOS, built around open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent). Notes, discovery, permissions, and document review stay in SophoNote; Hermes remains the agent runtime. This project is neither a Hermes Desktop fork nor a UI clone.
 
 SophoNote is a **client surface** around a pinned Hermes sidecar:
