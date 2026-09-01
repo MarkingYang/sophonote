@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export PYTHONHOME="$HERE/python"
+export PYTHONPATH="$HERE/site-packages"
+
+# Keep a tiny immutable watchdog between SophoNote and Python. Tauri's regular
+# exit hook stops the child, while this parent probe also covers SIGTERM/crash
+# where Rust destructors are not guaranteed to run.
+HOST_PID=${SOPHONOTE_HOST_PID:-$PPID}
+CHILD_PID=
+cleanup() {
+  trap - EXIT INT TERM HUP
+  if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+    kill "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$HERE/python/bin/python3" -m hermes_cli.main "$@" &
+CHILD_PID=$!
+while kill -0 "$CHILD_PID" 2>/dev/null; do
+  if ! kill -0 "$HOST_PID" 2>/dev/null; then
+    cleanup
+    exit 0
+  fi
+  sleep 1
+done
+
+if wait "$CHILD_PID"; then
+  STATUS=0
+else
+  STATUS=$?
+fi
+trap - EXIT INT TERM HUP
+exit "$STATUS"

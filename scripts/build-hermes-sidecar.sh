@@ -90,6 +90,12 @@ fi
 
 command -v uv >/dev/null 2>&1 || { echo "uv is required" >&2; exit 2; }
 test -f "$SOURCE/pyproject.toml" || { echo "Hermes source missing: $SOURCE" >&2; exit 2; }
+for asset in hermes-launcher hermes.cmd hermes_watchdog.py; do
+  test -f "$SCRIPT_DIR/assets/$asset" || {
+    echo "Hermes launcher asset missing: $SCRIPT_DIR/assets/$asset" >&2
+    exit 2
+  }
+done
 test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$SOURCE/pyproject.toml" | head -1)" = "$VERSION" || {
   echo "Hermes version does not match pinned $VERSION" >&2; exit 2;
 }
