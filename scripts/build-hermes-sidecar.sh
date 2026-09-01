@@ -9,6 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 VERSION=0.20.0
 COMMIT=3c27eb6234bf91b8ceee9e9071591b31e9b148cb
+PYTHON_VERSION=3.11.15
 SOURCE=${HERMES_SOURCE_DIR:-}
 if [ -z "$SOURCE" ]; then
   echo "Set HERMES_SOURCE_DIR to a Hermes Agent ${VERSION} checkout (commit ${COMMIT})." >&2
@@ -114,7 +115,8 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 RUNTIME="$TMP/runtime"
 mkdir -p "$RUNTIME/python" "$RUNTIME/site-packages" "$RUNTIME/bin" "$TMP/seed"
 
-PYTHON=$(normalize_path "$(uv python find 3.11)")
+uv python install "$PYTHON_VERSION"
+PYTHON=$(normalize_path "$(uv python find "$PYTHON_VERSION")")
 case "$PYTHON" in
   [A-Za-z]:*)
     if command -v cygpath >/dev/null 2>&1; then
