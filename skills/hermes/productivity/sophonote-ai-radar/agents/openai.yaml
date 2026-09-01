@@ -1,0 +1,4 @@
+interface:
+  display_name: "SophoNote AI 雷达"
+  short_description: "五断面发现管线：精选、全部 AI 动态、日/周/月报、主题、模型榜"
+  default_prompt: "Use $sophonote-ai-radar to run the SophoNote discovery pipeline, generate quick/deep reads, daily/weekly/monthly reports, or manage its Hermes Cron schedule."

@@ -1,0 +1,82 @@
+[package]
+name = "sophonote"
+version = "0.1.0"
+description = "SophoNote — AI Knowledge Manager"
+authors = ["fei"]
+license = "MIT"
+edition = "2021"
+default-run = "sophonote"
+autobins = false
+
+[lib]
+name = "sophonote_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "sophonote"
+path = "src/main.rs"
+
+# Only Cargo integration tests build this legacy protocol fixture. It is never
+# a product binary or a macOS bundle executable.
+[[bin]]
+name = "hermes_health_stub"
+path = "src/bin/hermes_health_stub.rs"
+test = true
+bench = false
+required-features = ["legacy-hermes-fixture"]
+
+[features]
+default = []
+legacy-hermes-fixture = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "unstable"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-process = "2"
+tauri-plugin-os = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+anyhow = "1"
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
+regex = "1"
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.21"
+sqlite-vec = "0.1"
+futures-util = "0.3"
+tokio-tungstenite = "0.28"
+# ---- Track B · 智能体演进（AG-01 追加）：ModelGateway（Phase 0） ----
+async-trait = "0.1"
+tokio-util = "0.7"
+# ---- Track B · 智能体演进（AG-04 追加）：Phase 1 Spike 采纳门禁 ----
+# 硬性限制③：锁定精确版本，升级必须跑 Agent Runtime 回归。
+# rig-agent = sans-IO AgentRun 状态机（agent::run）；rig-core = 消息/工具契约。
+# 摸底记录（2026-08-07）：两 crate 同版发布；rig-agent edition 2024 → 要求 rustc ≥1.85；
+# rig-core 会带入 reqwest ^0.13（与本项目 0.12 并存，Gateway 不启用 Rig Provider）。
+rig-core = "=0.41.0"
+rig-agent = "=0.41.0"
+# ---- Track B · 智能体演进（AG-08 追加）：MCP stdio 工具接入（Spike 门禁⑥） ----
+# rmcp = MCP Rust SDK 客户端侧。default-features=false 剥掉 server/macros，
+# 只留 client + child-process 传输，避免把服务端依赖面拖进桌面应用。
+# 摸底记录（2026-08-08，源码核实）：3.1.2 实现 MCP 2026-07-28 规范（兼容 ≤2025-11-25），
+# edition 2024 → 要求 rustc ≥1.88；rmcp 类型按硬性限制⑤同款口径收敛在 tools/mcp.rs。
+rmcp = { version = "=3.1.2", default-features = false, features = ["client", "transport-child-process"] }
+# H2：Hermes sidecar 二进制 sha256 校验
+sha2 = "0.10"
+serde_yaml = "0.9"
+toml = "0.8"
+portable-pty = "0.9.0"
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"

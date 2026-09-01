@@ -1,0 +1,4 @@
+interface:
+  display_name: "SophoNote OpenRouter Rankings"
+  short_description: "Refresh official OpenRouter ranking snapshots for SophoNote."
+  default_prompt: "Use $sophonote-openrouter-rankings to refresh or inspect the official OpenRouter model rankings snapshot."

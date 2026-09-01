@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "source": "Sanitized and rewritten from the intent of the maintainer's former local MindBox schedules. No private job IDs, run history, model settings, timestamps, or outputs are included.",
+  "examples": [
+    {
+      "id": "daily-quality-discovery",
+      "name": "每日高质量发现",
+      "description": "每天晚间刷新公开信源，沉淀值得继续阅读的 AI 动态。",
+      "prompt": "使用 sophonote-ai-radar 技能刷新已配置的公开信源，完成候选评分与深度解读，只保存满足质量要求的内容，并在本地返回简短执行摘要。",
+      "schedule": "0 20 * * *",
+      "skills": ["sophonote-ai-radar"],
+      "startPaused": true
+    },
+    {
+      "id": "daily-ai-report",
+      "name": "AI 日报",
+      "description": "每天早晨根据已经保存的深度解读汇总一份本地日报。",
+      "prompt": "使用 sophonote-ai-radar 技能读取最近一天已经保存且具备深度解读的 AI 动态，生成结构清晰的 AI 日报并保存到本地；不要为凑数补造事实。",
+      "schedule": "30 8 * * *",
+      "skills": ["sophonote-ai-radar"],
+      "startPaused": true
+    },
+    {
+      "id": "weekly-ai-report",
+      "name": "AI 周报",
+      "description": "每周日回顾一周内的重要变化、趋势和待跟进主题。",
+      "prompt": "使用 sophonote-ai-radar 技能读取最近一周已经保存的深度解读，生成包含关键变化、趋势判断、证据链接与下周关注项的 AI 周报并保存到本地。",
+      "schedule": "0 21 * * 0",
+      "skills": ["sophonote-ai-radar"],
+      "startPaused": true
+    },
+    {
+      "id": "monthly-ai-report",
+      "name": "AI 月报",
+      "description": "每月一日把上月的重要事件整理成长期可回看的月度记录。",
+      "prompt": "使用 sophonote-ai-radar 技能读取上一个自然月已经保存的深度解读，生成按主题组织的 AI 月报，保留关键证据、趋势变化与后续观察项，并保存到本地。",
+      "schedule": "0 9 1 * *",
+      "skills": ["sophonote-ai-radar"],
+      "startPaused": true
+    },
+    {
+      "id": "openrouter-model-rankings",
+      "name": "OpenRouter 模型榜更新",
+      "description": "每天更新公开模型目录、使用趋势、成本和基准信息。",
+      "prompt": "使用 sophonote-openrouter-rankings 技能刷新 OpenRouter 的公开模型目录、使用趋势、任务分类、成本与基准数据，保存原子快照并在本地返回简短摘要。",
+      "schedule": "30 8 * * *",
+      "skills": ["sophonote-openrouter-rankings"],
+      "startPaused": true
+    }
+  ]
+}

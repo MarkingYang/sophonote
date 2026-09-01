@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "__APPLE_SIGNING_IDENTITY__",
+      "entitlements": "Entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "__SOPHONOTE_UPDATER_PUBKEY__",
+      "endpoints": ["__SOPHONOTE_UPDATER_ENDPOINT__"]
+    }
+  }
+}

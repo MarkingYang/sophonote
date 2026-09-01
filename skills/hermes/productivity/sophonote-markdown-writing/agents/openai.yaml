@@ -1,0 +1,7 @@
+interface:
+  display_name: "SophoNote Markdown 写作"
+  short_description: "操作笔记标题、正文与项目层级，完成 Markdown 写作"
+  brand_color: "#2563EB"
+  default_prompt: "Use $sophonote-markdown-writing to improve the current SophoNote note or organize its project document tree."
+policy:
+  allow_implicit_invocation: true

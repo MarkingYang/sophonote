@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SophoNote 当前实装架构",
+    "subtitle": "本地优先产品壳 + Hermes 执行平面；虚线节点是下一阶段尚未闭合的控制门禁",
+    "output": "sophonote-current-architecture.html",
+    "animation": "none",
+    "visual_preset": "editorial",
+    "quality_profile": "showcase",
+    "viewBox": [1360, 820],
+    "views": [
+      {
+        "id": "conversation-path",
+        "label": "会话执行主链",
+        "focus": ["product_surfaces", "chat_surface", "tauri_host", "run_store", "hermes_runtime"],
+        "note": "三个入口复用同一 Chat 组件，经 Rust Host、RunStore 和 Hermes Gateway 执行。"
+      },
+      {
+        "id": "document-safety",
+        "label": "文档安全写回",
+        "focus": ["editor", "document_service", "local_data", "hermes_runtime"],
+        "note": "Hermes 只修改工作副本；正文必须经审批、CAS 和 DocumentService 写回。"
+      },
+      {
+        "id": "next-gates",
+        "label": "下一阶段门禁",
+        "focus": ["scope_policy", "chat_surface", "tauri_host", "cron_surface"],
+        "note": "正式 ScopeSnapshot、统一 ToolContext/Policy 和共享会话内核仍是主要结构性缺口。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "product_surfaces",
+      "type": "frontend",
+      "label": "产品入口层",
+      "sublabel": "会话 · 工作室 · 笔记本",
+      "tag": "React / WKWebView",
+      "pos": [40, 240],
+      "size": [180, 76]
+    },
+    {
+      "id": "chat_surface",
+      "type": "frontend",
+      "label": "ProjectChatPanel",
+      "sublabel": "消息 · 过程轨 · Composer · 能力面",
+      "tag": "当前共享组件 / 待抽 Core",
+      "pos": [290, 240],
+      "size": [190, 76]
+    },
+    {
+      "id": "editor",
+      "type": "frontend",
+      "label": "Markdown 工作台",
+      "sublabel": "Crepe / ProseMirror / DraftQueue",
+      "pos": [290, 450],
+      "size": [190, 76]
+    },
+    {
+      "id": "tauri_host",
+      "type": "backend",
+      "label": "SophoNote Rust Host",
+      "sublabel": "Tauri Commands · Agent Adapter",
+      "tag": "副作用与产品控制面",
+      "pos": [570, 240],
+      "size": [200, 76]
+    },
+    {
+      "id": "scope_policy",
+      "type": "security",
+      "label": "ScopeSnapshot / Policy",
+      "sublabel": "正式作用域与通用工具策略",
+      "tag": "NEXT-031 / 035 / 011",
+      "pos": [570, 70],
+      "size": [200, 76]
+    },
+    {
+      "id": "run_store",
+      "type": "database",
+      "label": "RunStore",
+      "sublabel": "Thread · Run · Event · Replay",
+      "tag": "UI / 恢复真相源",
+      "pos": [850, 110],
+      "size": [180, 76]
+    },
+    {
+      "id": "document_service",
+      "type": "backend",
+      "label": "DocumentService",
+      "sublabel": "Patch · CAS · Anchor · 审批",
+      "tag": "唯一正文写入口",
+      "pos": [570, 450],
+      "size": [200, 76]
+    },
+    {
+      "id": "local_data",
+      "type": "database",
+      "label": "本地数据平面",
+      "sublabel": "notes/*.md · sophonote.db · assets",
+      "tag": "Markdown 正文真相源",
+      "pos": [850, 450],
+      "size": [190, 76]
+    },
+    {
+      "id": "hermes_runtime",
+      "type": "external",
+      "label": "Hermes Runtime 0.20",
+      "sublabel": "Session · Memory · Skill · Tool Loop",
+      "tag": "钉扎 Sidecar / Gateway WS",
+      "pos": [850, 260],
+      "size": [190, 76]
+    },
+    {
+      "id": "capabilities",
+      "type": "external",
+      "label": "外部能力",
+      "sublabel": "Provider · MCP · Browser · Sources",
+      "pos": [1120, 260],
+      "size": [180, 76]
+    },
+    {
+      "id": "cron_surface",
+      "type": "frontend",
+      "label": "计划任务 Surface",
+      "sublabel": "Hermes Cron 只读投影",
+      "tag": "在途 / 待宿主验收",
+      "pos": [1120, 450],
+      "size": [180, 76]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SophoNote 应用进程与本地数据域",
+      "wraps": ["product_surfaces", "chat_surface", "editor", "tauri_host", "scope_policy", "run_store", "document_service", "local_data", "cron_surface"],
+      "pad": 20
+    },
+    {
+      "kind": "security-group",
+      "label": "Rust 副作用边界",
+      "wraps": ["tauri_host", "document_service", "run_store"],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    { "id": "surfaces_to_chat", "from": "product_surfaces", "to": "chat_surface", "label": "复用视图", "variant": "emphasis" },
+    { "id": "chat_to_host", "from": "chat_surface", "to": "tauri_host", "label": "invoke / Channel", "variant": "emphasis" },
+    { "id": "host_to_hermes", "from": "tauri_host", "to": "hermes_runtime", "label": "JSON-RPC / WS", "variant": "emphasis", "labelAt": [750, 330] },
+    { "id": "hermes_to_caps", "from": "hermes_runtime", "to": "capabilities", "label": "模型与工具", "variant": "emphasis", "labelAt": [1040, 350] },
+    { "id": "host_to_store", "from": "tauri_host", "to": "run_store", "label": "durable-first" },
+    { "id": "editor_to_docs", "from": "editor", "to": "document_service", "label": "保存 / Apply", "variant": "security" },
+    { "id": "docs_to_data", "from": "document_service", "to": "local_data", "label": "原子写 + CAS", "variant": "security", "labelAt": [794, 540] },
+    { "id": "hermes_to_docs", "from": "hermes_runtime", "to": "document_service", "label": "工作副本 → Patch", "variant": "dashed" },
+    { "id": "scope_to_host", "from": "scope_policy", "to": "tauri_host", "label": "待固化门禁", "variant": "dashed", "labelAt": [670, 160] },
+    { "id": "cron_reads_hermes", "from": "hermes_runtime", "to": "cron_surface", "label": "Cron 状态投影", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "已稳定的架构底座",
+      "items": [
+        "Rust 拥有文件、SQLite、网络和子进程副作用",
+        "RunStore-first 事件恢复与 Hermes Session 1:1",
+        "Markdown 正文唯一经 DocumentService 写回"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "当前结构性缺口",
+      "items": [
+        "ProjectChatPanel 尚未抽成无页面依赖的 ConversationCore",
+        "Thread / Run 尚无正式 scope_type 与 scope_snapshot_json",
+        "通用 ToolContext / Policy / idempotency 尚未形成"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "发布前门禁",
+      "items": [
+        "5 KB / 50 KB / 200 篇宿主性能证据",
+        "真实 Provider + Skill + MCP + Patch 整场",
+        "Developer ID 公证与干净 macOS D4 / D5"
+      ]
+    }
+  ]
+}

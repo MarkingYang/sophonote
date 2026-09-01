@@ -1,0 +1,4 @@
+interface:
+  display_name: "SophoNote 笔记持久化"
+  short_description: "先确定目标与形式，再创建或保存 SophoNote 写作成果"
+  default_prompt: "Use $sophonote-note-persistence to resolve the attached SophoNote destination and artifact form before long-form writing, then create or save the result directly in that project, document, or selection."

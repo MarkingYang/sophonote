@@ -1,0 +1,29 @@
+SophoNote
+Copyright (c) 2026 SophoNote Contributors
+
+This product is licensed under the MIT License. See LICENSE.
+
+Third-party software
+====================
+
+Hermes Agent
+  Copyright Nous Research and contributors
+  License: MIT
+  Source: https://github.com/NousResearch/hermes-agent
+  SophoNote embeds a pinned Hermes Runtime as an execution sidecar. The sidecar
+  binaries are not stored in git; they are produced by `pnpm hermes:bundle`.
+  Redistribution of a packaged SophoNote.app must retain Hermes' MIT notice.
+
+CPython
+  Copyright Python Software Foundation
+  License: PSF License Agreement
+  The bundled Hermes Runtime may include a private CPython tree. Redistribute
+  according to the PSF license shipped with that tree.
+
+Other dependencies
+  Rust crates: see src-tauri/Cargo.lock
+  JavaScript packages: see pnpm-lock.yaml
+  Individual licenses remain those of their authors.
+
+Do not commit API keys, Keychain dumps, `.env.hermes.local`,
+`.hermes-surface.token`, or user notes/SQLite from Application Support.

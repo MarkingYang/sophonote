@@ -1,0 +1,64 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+src-tauri/resources/hermes/*-apple-darwin/
+src-tauri/resources/hermes/*-pc-windows-msvc/
+src-tauri/tauri.release.conf.json
+src-tauri/tauri.release.windows.conf.json
+dist-ssr
+*.local
+
+# Local secrets and developer-only environment
+.env
+.env.*
+!.env.hermes.example
+*.pem
+*.p12
+*.pfx
+
+# User/runtime data must never enter the source repository
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+/notes/
+/workspace/
+/runtime/
+/hermes/
+/com.fei.sophonote/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.keychain-login-password
+
+# 运行时产物
+.dev.pid
+.hermes-surface.pid
+.hermes-surface.token
+
+# archify skill 上游源包（只入库 skills/hermes/productivity/archify 本体）
+archify-main/
+archify.tar.gz
+
+# 本地会话过程笔记，不入库
+.workbuddy/
+
+# Local code-analysis output
+graphify-out/
+**/graphify-out/

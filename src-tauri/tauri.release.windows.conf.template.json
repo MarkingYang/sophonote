@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "certificateThumbprint": "__WINDOWS_CERTIFICATE_THUMBPRINT__",
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "__SOPHONOTE_UPDATER_PUBKEY__",
+      "endpoints": ["__SOPHONOTE_UPDATER_ENDPOINT__"]
+    }
+  }
+}

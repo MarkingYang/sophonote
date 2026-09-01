@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SophoNote + Hermes Sidecar Target Architecture",
+    "subtitle": "Hermes Runs API owns generic agent execution; SophoNote retains policy, evidence, document truth, and canonical state",
+    "output": "sophonote/docs/hermes-runtime-architecture.html",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "run_control",
+        "label": "Run control",
+        "focus": ["desktop", "agent_host", "hermes_adapter", "hermes"],
+        "note": "SophoNote creates canonical runs; the adapter drives Hermes over authenticated HTTP/SSE."
+      },
+      {
+        "id": "tool_boundary",
+        "label": "Tool security boundary",
+        "focus": ["hermes", "tool_gateway", "approved_sources", "doc_change"],
+        "note": "Hermes receives only curated SophoNote tools and cannot write project files directly."
+      },
+      {
+        "id": "truth_and_evidence",
+        "label": "Truth and evidence",
+        "focus": ["context", "project_store", "doc_change", "audit_store"],
+        "note": "SophoNote remains the source of truth for context, evidence, patches, approvals, and audit history."
+      }
+    ]
+  },
+  "components": [
+    {"id": "user", "type": "external", "label": "Knowledge Worker", "sublabel": "research, write, decide", "pos": [30, 300], "size": [140, 62]},
+    {"id": "desktop", "type": "frontend", "label": "SophoNote Desktop", "sublabel": "editor + run review UI", "pos": [240, 300], "size": [150, 64], "tag": "SophoNote"},
+    {"id": "agent_host", "type": "backend", "label": "Agent Host", "sublabel": "canonical run + event map", "pos": [470, 300], "size": [158, 66], "tag": "SophoNote"},
+    {"id": "hermes_adapter", "type": "backend", "label": "Hermes Adapter", "sublabel": "spawn + health + HTTP/SSE", "pos": [700, 120], "size": [170, 68], "tag": "SophoNote"},
+    {"id": "context", "type": "backend", "label": "Context & Evidence", "sublabel": "scope + citations + budgets", "pos": [700, 300], "size": [170, 68], "tag": "SophoNote"},
+    {"id": "doc_change", "type": "security", "label": "Document Change", "sublabel": "Patch + approval + commit", "pos": [974, 550], "size": [170, 68], "tag": "SophoNote"},
+    {"id": "hermes", "type": "external", "label": "Hermes API Server", "sublabel": "/v1/runs + SSE + stop", "pos": [970, 120], "size": [178, 70], "tag": "isolated sidecar"},
+    {"id": "tool_gateway", "type": "security", "label": "SophoNote MCP Bridge", "sublabel": "allowlist + policy + provenance", "pos": [970, 360], "size": [178, 70], "tag": "trusted boundary"},
+    {"id": "project_store", "type": "database", "label": "Project Store", "sublabel": "Markdown + SQLite metadata", "pos": [700, 550], "size": [170, 68], "tag": "source of truth"},
+    {"id": "audit_store", "type": "database", "label": "Run & Audit Store", "sublabel": "events + approvals + evidence", "pos": [464, 550], "size": [170, 68], "tag": "SophoNote"},
+    {"id": "models", "type": "cloud", "label": "Model Providers", "sublabel": "task-routed LLMs", "pos": [1240, 120], "size": [160, 68]},
+    {"id": "approved_sources", "type": "cloud", "label": "Approved MCP / Sources", "sublabel": "GitHub, HN, arXiv, HF", "pos": [1240, 360], "size": [180, 70]}
+  ],
+  "boundaries": [
+    {"kind": "region", "label": "SophoNote trusted application", "wraps": ["desktop", "agent_host", "hermes_adapter", "context", "doc_change", "tool_gateway", "project_store", "audit_store"], "pad": 22},
+    {"kind": "security-group", "label": "Hermes isolated process", "wraps": ["hermes"], "pad": 18},
+    {"kind": "security-group", "label": "External network", "wraps": ["models", "approved_sources"], "pad": 18}
+  ],
+  "connections": [
+    {"from": "user", "to": "desktop", "variant": "emphasis"},
+    {"from": "desktop", "to": "agent_host", "variant": "emphasis"},
+    {"from": "agent_host", "to": "hermes_adapter", "label": "start / stop", "variant": "security"},
+    {"from": "hermes_adapter", "to": "hermes", "variant": "security"},
+    {"from": "agent_host", "to": "context", "variant": "emphasis"},
+    {"from": "context", "to": "project_store", "variant": "default"},
+    {"from": "hermes", "to": "models", "variant": "default"},
+    {"from": "hermes", "to": "tool_gateway", "variant": "security"},
+    {"from": "tool_gateway", "to": "approved_sources", "variant": "security"},
+    {"from": "tool_gateway", "to": "doc_change", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "orthogonal-v"},
+    {"from": "doc_change", "to": "project_store", "variant": "emphasis"},
+    {"from": "agent_host", "to": "audit_store", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "orthogonal-v"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "Hermes Owns", "items": ["Agent loop, tool scheduling, model calls, streaming", "MCP and Skill execution inside a constrained runtime", "Generic retry, cancellation, and sub-run mechanics"]},
+    {"dot": "emerald", "title": "SophoNote Owns", "items": ["Markdown truth, evidence, relevance, and decision state", "Permissions, approvals, tool catalog, and final writes", "Canonical run history and product-facing event semantics"]},
+    {"dot": "rose", "title": "Hard Security Rules", "items": ["No direct shell or filesystem write tools in the first release", "Hermes can only call the authenticated SophoNote MCP Bridge", "Every document mutation is a reviewable patch before commit"]}
+  ]
+}

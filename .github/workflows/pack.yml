@@ -1,0 +1,81 @@
+name: Pack
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos-apple-silicon:
+    name: macOS Apple Silicon pack
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 07da945c214481083049500bd29f45cabc5a04b2
+          path: .hermes-src
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Pack unsigned Apple Silicon app
+        env:
+          HERMES_SOURCE_DIR: ${{ github.workspace }}/.hermes-src
+        run: pnpm pack:macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sophonote-macos-aarch64-unsigned
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/pack-evidence/**
+          if-no-files-found: error
+
+  windows-x64:
+    name: Windows x64 NSIS pack
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 07da945c214481083049500bd29f45cabc5a04b2
+          path: .hermes-src
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: astral-sh/setup-uv@v5
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Pack unsigned Windows NSIS
+        env:
+          HERMES_SOURCE_DIR: ${{ github.workspace }}/.hermes-src
+        run: pnpm pack:windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sophonote-windows-x64-unsigned
+          path: |
+            src-tauri/target/release/bundle/nsis/*
+            src-tauri/target/release/pack-evidence/**
+          if-no-files-found: error

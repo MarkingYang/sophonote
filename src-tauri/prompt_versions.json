@@ -1,0 +1,14 @@
+{
+  "enrich": "enrich@v1",
+  "deepDive": "deepdive@v1",
+  "daily": "daily@v1",
+  "weekly": "weekly@v1",
+  "summary": "summary@v1",
+  "tags": "tags@v1",
+  "pick": "pick@v1",
+  "manualEdit": "manual-edit@v1",
+  "nightly": "nightly@v1",
+  "projectAssign": "project-assign@v1",
+  "completion": "completion@v1",
+  "agentChat": "agent-chat@v1"
+}
