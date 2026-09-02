@@ -738,6 +738,7 @@ export default function DocWorkspace({
     () => missingNoteExamples(articles.map((article) => article.title)).length,
     [articles],
   );
+  const importedExampleCount = noteExamples.length - remainingExampleCount;
 
   const handleImportExamples = async () => {
     if (importingExamples) return;
@@ -768,6 +769,20 @@ export default function DocWorkspace({
     } finally {
       setImportingExamples(false);
     }
+  };
+
+  const handleOpenExamples = async () => {
+    if (remainingExampleCount > 0) {
+      await handleImportExamples();
+      return;
+    }
+    const firstExisting = articles.find((article) => article.title === noteExamples[0]?.title);
+    if (!firstExisting) return;
+    revealArticleDate(firstExisting);
+    setSelectedId(firstExisting.id);
+    setSelectedTag(null);
+    setSearch('');
+    setGenMessage('已打开功能范例；可从左侧列表继续查看其余样例。');
   };
 
   // NB-31：后端删除成功后才复位选中；失败保留选中态与列表项（防"假删除"）
@@ -1118,6 +1133,24 @@ export default function DocWorkspace({
               className="w-full text-xs pl-7 pr-2 py-1.5 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)] placeholder:text-[var(--text-disabled)] focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_var(--accent-subtle)]"
             />
           </div>
+          {enableStarterExamples && (
+            <button
+              type="button"
+              onClick={() => void handleOpenExamples()}
+              disabled={importingExamples}
+              className="flex w-full items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2 text-left transition-colors hover:border-[var(--accent-border)] hover:bg-[var(--accent-subtle)] disabled:opacity-60"
+            >
+              {importingExamples ? <Loader2 size={14} className="shrink-0 animate-spin text-[var(--accent)]" /> : <BookOpenText size={14} className="shrink-0 text-[var(--accent)]" />}
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-[var(--text-secondary)]">功能范例</span>
+                <span className="mt-0.5 block truncate text-[11px] text-[var(--text-tertiary)]">
+                  {remainingExampleCount > 0
+                    ? `导入 ${remainingExampleCount} 篇缺失范例，不覆盖已有笔记`
+                    : `${importedExampleCount} 篇已导入 · 打开查看`}
+                </span>
+              </span>
+            </button>
+          )}
           {genMessage && <p className="text-xs px-1 text-[var(--text-tertiary)]">{genMessage}</p>}
           {showTags && topTags.length > 0 && (
             <div className="flex flex-wrap gap-1">

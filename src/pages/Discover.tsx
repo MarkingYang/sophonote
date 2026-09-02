@@ -25,6 +25,17 @@ const ALL_MIN = 7;
 const WINDOW_DAYS = 7;
 const PAGE_SIZE = 40;
 
+export function recentDiscoveryFallbackQuery(
+  aspect: tauri.DiscoveryAspect | null,
+): tauri.DiscoveryFeedQuery {
+  return {
+    minScore: ALL_MIN,
+    requireDeep: true,
+    aspect,
+    limit: 6,
+  };
+}
+
 const sections: { id: Section; name: string; icon: React.FC<{ size?: number; className?: string }> }[] = [
   { id: 'featured', name: '精选', icon: Sparkles },
   { id: 'all', name: '全部 AI 动态', icon: List },
@@ -100,6 +111,7 @@ export default function Discover() {
   const [aspect, setAspect] = useState<tauri.DiscoveryAspect | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [rows, setRows] = useState<tauri.DiscoveryFeedRow[]>([]);
+  const [recentFallbackRows, setRecentFallbackRows] = useState<tauri.DiscoveryFeedRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -133,10 +145,17 @@ export default function Discover() {
     try {
       const page = await tauri.getDiscoveryFeed(feedQuery(null));
       setRows(page.rows);
+      if (section === 'featured' && page.rows.length === 0) {
+        const recent = await tauri.getDiscoveryFeed(recentDiscoveryFallbackQuery(aspect));
+        setRecentFallbackRows(recent.rows);
+      } else {
+        setRecentFallbackRows([]);
+      }
       setNextCursor(section === 'all' ? (page.nextCursor ?? null) : null);
     } catch (e) {
       console.error('Failed to load discovery feed:', e);
       setRows([]);
+      setRecentFallbackRows([]);
       setNextCursor(null);
     } finally {
       setLoading(false);
@@ -149,6 +168,7 @@ export default function Discover() {
     } else {
       setLoading(false);
       setRows([]);
+      setRecentFallbackRows([]);
       setNextCursor(null);
     }
   }, [isFeed, reloadFeed]);
@@ -167,17 +187,20 @@ export default function Discover() {
     }
   };
 
+  const showingRecentFallback = section === 'featured' && rows.length === 0 && recentFallbackRows.length > 0;
+  const displayedRows = showingRecentFallback ? recentFallbackRows : rows;
+
   // 按打分日分组（feed 已按 ai_scored_at DESC 排序，Map 保序即倒序）
   const groups = useMemo(() => {
     const m = new Map<string, tauri.DiscoveryFeedRow[]>();
-    for (const row of rows) {
+    for (const row of displayedRows) {
       const date = row.aiScoredAt.slice(0, 10);
       const arr = m.get(date) || [];
       arr.push(row);
       m.set(date, arr);
     }
     return Array.from(m.entries());
-  }, [rows]);
+  }, [displayedRows]);
 
   const handleSediment = async (id: string) => {
     setSedimentingId(id);
@@ -293,10 +316,32 @@ export default function Discover() {
               <p className="text-[15px] font-bold text-[var(--d-ink)]">
                 {section === 'featured' ? '还没有精选内容' : '还没有动态'}
               </p>
+              <p className="mt-2 max-w-md text-[12px] leading-6 text-[var(--d-ink-3)]">
+                {section === 'featured'
+                  ? '计划任务完成深度解读后，近 7 天达到精选门槛的内容会出现在这里。'
+                  : '计划任务或会话完成发现与深度解读后，结果会按时间沉淀在这里。'}
+              </p>
             </div>
           </div>
         ) : (
           <>
+            {showingRecentFallback && (
+              <div className="hb-d-section-shell pb-2 pt-4">
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--d-divider)] bg-[var(--d-surface)] px-4 py-3">
+                  <div>
+                    <p className="text-[13px] font-bold text-[var(--d-ink)]">本周暂无新精选，先看看近期积累</p>
+                    <p className="mt-1 text-[11px] leading-5 text-[var(--d-ink-3)]">以下内容已完成深度解读且达到发现门槛，但不计入本周精选。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setSection('all'); setAspect(null); }}
+                    className="hb-d-chip shrink-0"
+                  >
+                    查看全部
+                  </button>
+                </div>
+              </div>
+            )}
             {groups.map(([date, dayRows], gIdx) => (
               <section
                 key={date}
@@ -313,8 +358,8 @@ export default function Discover() {
                     <DiscoverRow
                       key={`${row.id}:${row.aiScoredAt}`}
                       pick={rowToPick(row, index + 1)}
-                      rank={section === 'featured' ? index + 1 : null}
-                      hero={section === 'featured' && gIdx === 0 && index === 0}
+                      rank={section === 'featured' && !showingRecentFallback ? index + 1 : null}
+                      hero={section === 'featured' && !showingRecentFallback && gIdx === 0 && index === 0}
                       topics={row.aiTopics}
                       onStar={async (id) => { await starItem(id); await reloadFeed(); }}
                       onArchive={async (id) => { await archiveItem(id); await reloadFeed(); }}

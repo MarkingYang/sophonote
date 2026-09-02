@@ -424,6 +424,20 @@ export default function ProjectChatPanel({
     if (peekHermesModelOptions()) return;
     return refreshHermesModels();
   }, [refreshHermesModels]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void tauri.listenHermesStatusChanged((status) => {
+      if (status === 'connected') refreshHermesModels();
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [refreshHermesModels]);
 
   const rememberHermesModel = useCallback((provider: string, model: string) => {
     const row = hermesModels?.providers.find((item) => item.slug === provider);

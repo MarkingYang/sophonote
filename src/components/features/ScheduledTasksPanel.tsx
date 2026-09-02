@@ -29,6 +29,7 @@ import {
   hermesCronTrigger,
   hermesCronUpdate,
   hermesModelOptions,
+  listenHermesStatusChanged,
   projectList,
   restartHermesRuntime,
   type HermesCronDraft,
@@ -134,6 +135,33 @@ function decodeModel(value: string): { provider: string | null; model: string | 
   } catch {
     return { provider: null, model: null };
   }
+}
+
+export function selectableModelProviders(options: HermesModelOptions | null) {
+  return options?.providers.filter(
+    (provider) => provider.authenticated === true && provider.models.length > 0,
+  ) ?? [];
+}
+
+export function modelValueIsAvailable(
+  options: HermesModelOptions | null,
+  value: string,
+): boolean {
+  if (!value || options === null) return true;
+  return selectableModelProviders(options).some((provider) =>
+    provider.models.some((model) => encodeModel(provider.slug, model) === value));
+}
+
+function preferredModelValue(options: HermesModelOptions | null): string {
+  if (!options) return '';
+  const providers = selectableModelProviders(options);
+  const preferred = providers.find((provider) => provider.slug === options.provider)
+    ?? providers[0];
+  if (!preferred) return '';
+  const model = preferred.models.includes(options.model ?? '')
+    ? options.model
+    : preferred.models[0];
+  return encodeModel(preferred.slug, model ?? null);
 }
 
 export function taskRule(job: HermesCronJobInfo): string {
@@ -318,6 +346,9 @@ function TaskEditor({
   example,
   projects,
   modelOptions,
+  modelOptionsLoading,
+  modelOptionsError,
+  onRefreshModels,
   onClose,
   onSaved,
   onDeleted,
@@ -326,6 +357,9 @@ function TaskEditor({
   example: ScheduledTaskExample | null;
   projects: Project[];
   modelOptions: HermesModelOptions | null;
+  modelOptionsLoading: boolean;
+  modelOptionsError: string;
+  onRefreshModels: () => Promise<void>;
   onClose: () => void;
   onSaved: (job: HermesCronJobInfo) => void;
   onDeleted: (job: HermesCronJobInfo) => void;
@@ -488,8 +522,11 @@ function TaskEditor({
     return () => window.clearInterval(timer);
   }, [displayedRun]);
 
-  const selectableProviders = modelOptions?.providers.filter((provider) => provider.authenticated === true && provider.models.length > 0) ?? [];
-  const currentModelAvailable = !editor.modelValue || selectableProviders.some((provider) => provider.models.some((model) => encodeModel(provider.slug, model) === editor.modelValue));
+  const selectableProviders = selectableModelProviders(modelOptions);
+  const currentModelAvailable = modelValueIsAvailable(modelOptions, editor.modelValue);
+  const currentModel = decodeModel(editor.modelValue);
+  const suggestedModelValue = preferredModelValue(modelOptions);
+  const suggestedModel = decodeModel(suggestedModelValue);
   const jobHasModel = job ? taskHasConfiguredModel(job) : false;
   const jobModelRunnable = jobHasModel && (modelOptions === null || currentModelAvailable);
 
@@ -572,12 +609,45 @@ function TaskEditor({
                     <span className="mb-1.5 block text-xs text-[var(--text-tertiary)]">模型</span>
                     <select value={editor.modelValue} onChange={(event) => setEditor((value) => ({ ...value, modelValue: event.target.value }))} className="input h-10">
                       <option value="">未配置（保存后自动暂停）</option>
-                      {!currentModelAvailable && <option value={editor.modelValue}>当前任务模型（配置已不可用）</option>}
+                      {!currentModelAvailable && <option value={editor.modelValue}>原模型 · {currentModel.provider} / {currentModel.model}（当前不可用）</option>}
                       {selectableProviders.map((provider) => <optgroup key={provider.slug} label={provider.name}>{provider.models.map((model) => <option key={`${provider.slug}:${model}`} value={encodeModel(provider.slug, model)}>{model}</option>)}</optgroup>)}
                     </select>
                   </label>
                 </div>
                 {!editor.modelValue && <p className="mt-2 text-xs text-[var(--warning)]">未选择模型。任务会保留，但保存后保持暂停，选择模型后才能启用或立即运行。</p>}
+                {!currentModelAvailable && editor.modelValue && (
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--warning-subtle)] px-3 py-2 text-xs text-[var(--warning)]">
+                    <span>原模型 {currentModel.provider} / {currentModel.model} 当前不可执行。</span>
+                    <span className="flex items-center gap-3">
+                      {suggestedModelValue && (
+                        <button
+                          type="button"
+                          onClick={() => setEditor((value) => ({ ...value, modelValue: suggestedModelValue }))}
+                          className="font-medium underline underline-offset-2"
+                        >
+                          改用 {suggestedModel.model}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void onRefreshModels()}
+                        disabled={modelOptionsLoading}
+                        className="inline-flex items-center gap-1 font-medium underline underline-offset-2 disabled:opacity-60"
+                      >
+                        {modelOptionsLoading && <Loader2 size={12} className="animate-spin" />}
+                        重新检查
+                      </button>
+                    </span>
+                  </div>
+                )}
+                {modelOptions !== null && selectableProviders.length === 0 && !editor.modelValue && (
+                  <p className="mt-2 flex items-center gap-2 text-xs text-[var(--warning)]">
+                    暂未读取到可执行模型。{modelOptionsError || 'Hermes 可能仍在同步刚保存的配置。'}
+                    <button type="button" onClick={() => void onRefreshModels()} disabled={modelOptionsLoading} className="font-medium underline disabled:opacity-60">
+                      {modelOptionsLoading ? '检查中…' : '重新检查'}
+                    </button>
+                  </p>
+                )}
               </div>
 
               {job && (
@@ -698,6 +768,8 @@ export default function ScheduledTasksPanel() {
   const [jobs, setJobs] = useState<HermesCronJobInfo[]>(() => cachedScheduledJobs());
   const [projects, setProjects] = useState<Project[]>([]);
   const [modelOptions, setModelOptions] = useState<HermesModelOptions | null>(null);
+  const [modelOptionsLoading, setModelOptionsLoading] = useState(false);
+  const [modelOptionsError, setModelOptionsError] = useState('');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(() => !scheduledJobsCacheHydrated());
   const [error, setError] = useState('');
@@ -706,6 +778,21 @@ export default function ScheduledTasksPanel() {
   const [selectedJob, setSelectedJob] = useState<HermesCronJobInfo | null>(null);
   const [selectedExample, setSelectedExample] = useState<ScheduledTaskExample | null>(null);
   const [examplesOpen, setExamplesOpen] = useState(false);
+
+  const refreshModelOptions = useCallback(async () => {
+    setModelOptionsLoading(true);
+    setModelOptionsError('');
+    try {
+      const next = await hermesModelOptions();
+      setModelOptions((current) => (
+        JSON.stringify(current) === JSON.stringify(next) ? current : next
+      ));
+    } catch (cause) {
+      setModelOptionsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelOptionsLoading(false);
+    }
+  }, []);
 
   // 自动兜底：检测错误是否为连接问题；若是，尝试重启 Hermes 后再重试一次。
   // 仅在前端重试时触发一次，避免与 health_supervisor 后台自动恢复重复叠加。
@@ -751,28 +838,39 @@ export default function ScheduledTasksPanel() {
       setJobs((current) => (JSON.stringify(current) === JSON.stringify(nextJobs) ? current : nextJobs));
       setCachedScheduledJobs(nextJobs);
       if (!quiet) {
-        const [nextProjects, nextModelOptions] = await Promise.all([
-          projectList(),
-          hermesModelOptions().catch(() => null),
-        ]);
+        const nextProjects = await projectList();
         setProjects((current) => (JSON.stringify(current) === JSON.stringify(nextProjects) ? current : nextProjects));
-        setModelOptions((current) => (
-          JSON.stringify(current) === JSON.stringify(nextModelOptions) ? current : nextModelOptions
-        ));
       }
+      await refreshModelOptions();
       setSelectedJob((current) => current ? nextJobs.find((job) => job.id === current.id && job.profile === current.profile) ?? null : null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (showSpinner) setLoading(false);
     }
-  }, []);
+  }, [refreshModelOptions]);
 
   useEffect(() => {
     if (shouldFetchScheduledJobsOnMount()) void load(false);
+    else void refreshModelOptions();
     const timer = globalThis.setInterval(() => void load(true), 15_000);
     return () => globalThis.clearInterval(timer);
-  }, [load]);
+  }, [load, refreshModelOptions]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listenHermesStatusChanged((status) => {
+      if (status === 'connected') void refreshModelOptions();
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [refreshModelOptions]);
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
@@ -781,12 +879,14 @@ export default function ScheduledTasksPanel() {
   }, [jobs, query]);
 
   const openCreate = (example: ScheduledTaskExample | null = null) => {
+    void refreshModelOptions();
     setSelectedJob(null);
     setSelectedExample(example);
     setExamplesOpen(false);
     setEditorOpen(true);
   };
   const openEdit = (job: HermesCronJobInfo) => {
+    void refreshModelOptions();
     setSelectedExample(null);
     setSelectedJob(job);
     setEditorOpen(true);
@@ -878,7 +978,7 @@ export default function ScheduledTasksPanel() {
         </div>
       )}
 
-      {editorOpen && <TaskEditor job={selectedJob} example={selectedExample} projects={projects} modelOptions={modelOptions} onClose={() => setEditorOpen(false)} onSaved={upsert} onDeleted={(job) => { setJobs((current) => current.filter((item) => item.id !== job.id || item.profile !== job.profile)); setEditorOpen(false); }} />}
+      {editorOpen && <TaskEditor job={selectedJob} example={selectedExample} projects={projects} modelOptions={modelOptions} modelOptionsLoading={modelOptionsLoading} modelOptionsError={modelOptionsError} onRefreshModels={refreshModelOptions} onClose={() => setEditorOpen(false)} onSaved={upsert} onDeleted={(job) => { setJobs((current) => current.filter((item) => item.id !== job.id || item.profile !== job.profile)); setEditorOpen(false); }} />}
     </div>
   );
 }

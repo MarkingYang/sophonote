@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { HermesCronJobInfo, HermesCronRunInfo } from '../../../services/tauri';
+import type { HermesCronJobInfo, HermesCronRunInfo, HermesModelOptions } from '../../../services/tauri';
 import { scheduledTaskExampleDraft, scheduledTaskExamples } from '../../../services/scheduledTaskExamples';
 import {
   editorFromDraft,
@@ -7,7 +7,9 @@ import {
   editorRule,
   hasActiveCronRun,
   isCronRunStartupStalled,
+  modelValueIsAvailable,
   scheduleFromEditor,
+  selectableModelProviders,
   taskHasConfiguredModel,
   taskRule,
   type EditorState,
@@ -88,6 +90,26 @@ describe('计划任务常用频率', () => {
     expect(taskHasConfiguredModel(empty)).toBe(false);
     expect(taskHasConfiguredModel({ ...empty, provider: 'deepseek', model: null })).toBe(false);
     expect(taskHasConfiguredModel({ ...empty, provider: 'deepseek', model: 'deepseek-v4-flash' })).toBe(true);
+  });
+
+  it('Runtime 重连后的模型目录可恢复原计划任务模型', () => {
+    const unavailable: HermesModelOptions = { provider: null, model: null, providers: [] };
+    const recovered: HermesModelOptions = {
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      providers: [{
+        slug: 'deepseek',
+        name: 'DeepSeek',
+        models: ['deepseek-v4-flash'],
+        authenticated: true,
+        isCurrent: true,
+      }],
+    };
+    const value = JSON.stringify(['deepseek', 'deepseek-v4-flash']);
+    expect(modelValueIsAvailable(unavailable, value)).toBe(false);
+    expect(selectableModelProviders(unavailable)).toHaveLength(0);
+    expect(modelValueIsAvailable(recovered, value)).toBe(true);
+    expect(selectableModelProviders(recovered)).toHaveLength(1);
   });
 
   it('表单始终提供本地化可读摘要', () => {
