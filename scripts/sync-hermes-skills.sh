@@ -8,7 +8,7 @@ HERMES_ROOT="${SOPHONOTE_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
 TARGET_ROOT="$HERMES_ROOT/skills/productivity"
 BACKUP_ROOT="$HERMES_ROOT/sophonote-skill-backups"
 LEGACY="$TARGET_ROOT/sophonote"
-SKILLS="sophonote-ai-radar sophonote-help sophonote-markdown-writing sophonote-note-persistence sophonote-openrouter-rankings"
+SKILLS="sophonote-ai-radar sophonote-help sophonote-markdown-writing sophonote-note-persistence sophonote-computer-note sophonote-openrouter-rankings"
 
 for skill in $SKILLS; do
   source_dir="$ROOT/skills/hermes/productivity/$skill"

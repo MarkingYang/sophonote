@@ -48,7 +48,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/hermes/": "hermes/"
+      "resources/hermes/": "hermes/",
+      "../skills/hermes/productivity/sophonote-computer-note/": "sophonote-skills/sophonote-computer-note/"
     },
     "macOS": {
       "frameworks": [],

@@ -629,9 +629,23 @@ fn network_hint(network: NetworkContext) -> &'static str {
 
 #[cfg(target_os = "macos")]
 fn has_explicit_proxy_env() -> bool {
-    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
         .iter()
         .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+}
+
+/// Finder-launched apps do not inherit shell proxy variables. Reuse the same
+/// fixed macOS proxy as the official Runtime downloader for Hermes installers.
+/// Explicit environment configuration always wins; PAC is never guessed.
+pub(super) fn system_proxy_environment() -> Vec<(&'static str, String)> {
+    #[cfg(target_os = "macos")]
+    if !has_explicit_proxy_env() {
+        if let Some(url) = macos_system_proxy().url {
+            return ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+                .into_iter().map(|name| (name, url.clone())).collect();
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(target_os = "macos")]

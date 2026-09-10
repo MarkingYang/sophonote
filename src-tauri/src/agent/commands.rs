@@ -4069,7 +4069,7 @@ fn hermes_mcp_path(name: &str, suffix: &str) -> Result<String, String> {
     Ok(format!("api/mcp/servers/{name}{suffix}"))
 }
 
-async fn hermes_dashboard_request(
+pub(super) async fn hermes_dashboard_request(
     method: reqwest::Method,
     path: &str,
     body: Option<serde_json::Value>,

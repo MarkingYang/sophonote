@@ -208,7 +208,7 @@ PYTHONHOME="$RUNTIME/python" PYTHONPATH="$RUNTIME/site-packages" \
 # SophoNote-owned Skills are part of the client Surface, not the pinned upstream
 # Hermes checkout. Overlay them into the seed after copying upstream so a
 # clean-machine install receives the same Skill contract as development.
-for skill in sophonote-markdown-writing sophonote-note-persistence sophonote-ai-radar sophonote-help sophonote-openrouter-rankings archify; do
+for skill in sophonote-markdown-writing sophonote-note-persistence sophonote-computer-note sophonote-ai-radar sophonote-help sophonote-openrouter-rankings archify; do
   source_skill="$ROOT/skills/hermes/productivity/$skill"
   test -f "$source_skill/SKILL.md" || {
     echo "SophoNote Hermes Skill missing: $source_skill/SKILL.md" >&2

@@ -72,6 +72,8 @@ function bareToolName(name: string): string {
 export function toolDisplayName(name: string): string {
   const bare = bareToolName(name);
   switch (bare) {
+    case 'computer_use':
+      return '电脑操作';
     case 'list_project_documents':
       return '查看项目文档';
     case 'read_document':
@@ -156,6 +158,12 @@ export function toolStepSummary(card: ToolCard): string | null {
   if (card.argumentsJson) {
     try {
       const args = JSON.parse(card.argumentsJson) as Record<string, unknown>;
+      if (bareToolName(card.name) === 'computer_use') {
+        const actions: Record<string, string> = { capture: '读取窗口', screenshot: '读取屏幕', click: '点击', type: '输入', key: '快捷键', scroll: '滚动', drag: '拖动', list_apps: '查找应用' };
+        const action = typeof args.action === 'string' ? actions[args.action] : null;
+        const app = typeof args.app === 'string' ? args.app.slice(0, 120) : null;
+        return [action, app].filter(Boolean).join(' · ') || null;
+      }
       const title = typeof args.title === 'string' ? args.title : null;
       if (title && !looksLikeInternal(title)) return `《${title}》`;
       const articleId =

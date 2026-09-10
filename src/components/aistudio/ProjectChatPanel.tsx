@@ -18,9 +18,10 @@ import {
   Plus, Clock, Archive, FileText, FolderOpen, Image, Clipboard,
   Link2, ChevronDown, ChevronLeft, ChevronRight, Boxes, Search, AlertTriangle, Server,
   MessageSquareText, ShieldAlert, Zap,
-  Globe2,
+  Globe2, Monitor,
 } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
+import { ComputerUsePanel, COMPUTER_NOTE_SKILL } from './ComputerUsePanel';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { confirm as confirmDialog, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -300,6 +301,7 @@ export default function ProjectChatPanel({
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sessionSurface, setSessionSurface] = useState<HermesSessionSurface | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ nonce: number; text: string } | null>(null);
+  const [computerPanelOpen, setComputerPanelOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const [findIndex, setFindIndex] = useState(0);
@@ -1493,6 +1495,28 @@ export default function ProjectChatPanel({
         }}
         onDrop={acceptHtmlDrop}
       >
+        {computerPanelOpen && <div className="absolute inset-0 z-30 overflow-y-auto bg-[var(--bg-surface)]">
+          <ComputerUsePanel
+            enabled={hermesCapabilitySnapshot?.toolsets.some((toolset) => toolset.name === 'computer_use' && toolset.enabled) ?? false}
+            supported={hermesCapabilitySnapshot?.toolsets.some((toolset) => toolset.name === 'computer_use') ?? null}
+            locked={conversationLocked}
+            running={runningRunId != null}
+            hasSession={currentThreadId != null}
+            hasNote={Boolean(activeDocumentId || selection)}
+            skillAvailable={hermesSkills.some((skill) => skill.name === COMPUTER_NOTE_SKILL)}
+            onRefresh={refreshSkills}
+            onNewSession={handleNewSession}
+            onStop={async () => {
+              if (runningRunId && !(await cancelRun(runningRunId))) throw new Error('未能确认运行已停止，请重试或查看会话状态。');
+            }}
+            onPrepare={(text) => {
+              pickSkill(COMPUTER_NOTE_SKILL);
+              setComposerPrefill({ nonce: Date.now(), text });
+              setComputerPanelOpen(false);
+            }}
+            onClose={() => setComputerPanelOpen(false)}
+          />
+        </div>}
         {sessionNotice && (
           <p className="mb-2 text-xs text-[var(--text-tertiary)]">{sessionNotice}</p>
         )}
@@ -1639,6 +1663,9 @@ export default function ProjectChatPanel({
                   onChange={changePermissionMode}
                   disabled={conversationLocked}
                 />
+                <button type="button" title="电脑操作" aria-label="电脑操作" onClick={() => { refreshSkills(); setComputerPanelOpen(true); }} className="inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]">
+                  <Monitor size={13} /><span>电脑</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => void toggleSessionYolo()}
@@ -2742,11 +2769,11 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
     <div className="grid h-full min-h-0 grid-cols-[minmax(150px,0.9fr)_minmax(190px,1.1fr)]">
       <div className="min-h-0 overflow-y-auto border-r border-[var(--border-default)] p-2">
         <p className="px-2 pb-1 text-xs text-[var(--text-tertiary)]">Toolset 与执行能力</p>
-        {filteredToolsets.map((toolset) => <CapabilityMasterRow key={toolset.name} active={activeToolset?.name === toolset.name} title={toolset.name} subtitle={toolset.description} toggle={<div className="flex items-center gap-1"><span className="text-xs text-[var(--text-tertiary)]">×{toolset.usage || 0}</span><CapabilitySwitch checked={toolset.enabled} disabled={busyName === `tool:${toolset.name}`} onChange={(enabled) => void runAction(`tool:${toolset.name}`, async () => { await hermesToolsetSetEnabled(toolset.name, enabled); onRefresh(); })} /></div>} onClick={() => setSelectedToolset(toolset.name)} />)}
+        {filteredToolsets.map((toolset) => <CapabilityMasterRow key={toolset.name} active={activeToolset?.name === toolset.name} title={toolset.name === 'computer_use' ? '电脑操作' : toolset.name} subtitle={toolset.description} toggle={<div className="flex items-center gap-1"><span className="text-xs text-[var(--text-tertiary)]">×{toolset.usage || 0}</span><CapabilitySwitch checked={toolset.enabled} disabled={busyName === `tool:${toolset.name}`} onChange={(enabled) => void runAction(`tool:${toolset.name}`, async () => { await hermesToolsetSetEnabled(toolset.name, enabled); onRefresh(); })} /></div>} onClick={() => setSelectedToolset(toolset.name)} />)}
         {snapshot && filteredToolsets.length === 0 && <CapabilitySearchEmpty query={query} label="Toolset" />}
       </div>
       <div className="min-h-0 overflow-y-auto p-4">
-        {activeToolset ? <><h3 className="text-sm font-semibold text-[var(--text-primary)]">{activeToolset.name}</h3><p className="mt-1 text-xs leading-relaxed text-[var(--text-tertiary)]">{activeToolset.description}</p>{activeToolset.tools.length > 0 && <div className="mt-3 flex flex-wrap gap-1">{activeToolset.tools.map((name) => <span key={name} className="rounded bg-[var(--bg-sunken)] px-1.5 py-1 font-mono text-xs text-[var(--text-tertiary)]">{name}</span>)}</div>}{activeToolset.name === 'terminal' && snapshot && <div className="mt-5"><div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-semibold text-[var(--text-secondary)]">Execution backend</h4><button type="button" onClick={onRefresh} className="text-xs text-[var(--text-tertiary)]">刷新探测</button></div><div className="space-y-1.5">{snapshot.terminalBackends.backends.map((backend) => <button type="button" key={backend.name} disabled={busyName === `terminal:${backend.name}`} onClick={() => void runAction(`terminal:${backend.name}`, async () => { await hermesTerminalBackendSelect(backend.name); onRefresh(); })} className={`w-full rounded-lg border px-2.5 py-2 text-left ${backend.active ? 'border-[var(--accent-border)] bg-[var(--accent-subtle)]' : 'border-transparent bg-[var(--bg-sunken)] hover:border-[var(--border-default)]'}`}><span className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-medium text-[var(--text-secondary)]">{backend.label}</span><span className={`rounded px-1 py-0.5 text-xs ${backend.status === 'ready' ? 'bg-[var(--success-subtle)] text-[var(--success)]' : 'bg-[var(--warning-subtle)] text-[var(--warning)]'}`}>{backend.status === 'ready' ? 'Ready' : 'Needs setup'}</span>{backend.active && <span className="rounded bg-[var(--accent-subtle)] px-1 py-0.5 text-xs text-[var(--accent)]">In use</span>}</span><span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{backend.description}</span>{backend.detail && <span className="mt-1 flex items-start gap-1 text-xs text-[var(--warning)]"><AlertTriangle size={9} className="mt-0.5 shrink-0" />{backend.detail}</span>}</button>)}</div></div>}</> : <CapabilitySearchEmpty query={query} label="Toolset" />}
+        {activeToolset ? <><h3 className="text-sm font-semibold text-[var(--text-primary)]">{activeToolset.name}</h3><p className="mt-1 text-xs leading-relaxed text-[var(--text-tertiary)]">{activeToolset.description}</p>{activeToolset.tools.length > 0 && <div className="mt-3 flex flex-wrap gap-1">{activeToolset.tools.map((name) => <span key={name} className="rounded bg-[var(--bg-sunken)] px-1.5 py-1 font-mono text-xs text-[var(--text-tertiary)]">{name}</span>)}</div>}{activeToolset.name === 'computer_use' && <div className="mt-4"><ComputerUsePanel enabled={activeToolset.enabled} supported onRefresh={onRefresh} /></div>}{activeToolset.name === 'terminal' && snapshot && <div className="mt-5"><div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-semibold text-[var(--text-secondary)]">Execution backend</h4><button type="button" onClick={onRefresh} className="text-xs text-[var(--text-tertiary)]">刷新探测</button></div><div className="space-y-1.5">{snapshot.terminalBackends.backends.map((backend) => <button type="button" key={backend.name} disabled={busyName === `terminal:${backend.name}`} onClick={() => void runAction(`terminal:${backend.name}`, async () => { await hermesTerminalBackendSelect(backend.name); onRefresh(); })} className={`w-full rounded-lg border px-2.5 py-2 text-left ${backend.active ? 'border-[var(--accent-border)] bg-[var(--accent-subtle)]' : 'border-transparent bg-[var(--bg-sunken)] hover:border-[var(--border-default)]'}`}><span className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-medium text-[var(--text-secondary)]">{backend.label}</span><span className={`rounded px-1 py-0.5 text-xs ${backend.status === 'ready' ? 'bg-[var(--success-subtle)] text-[var(--success)]' : 'bg-[var(--warning-subtle)] text-[var(--warning)]'}`}>{backend.status === 'ready' ? 'Ready' : 'Needs setup'}</span>{backend.active && <span className="rounded bg-[var(--accent-subtle)] px-1 py-0.5 text-xs text-[var(--accent)]">In use</span>}</span><span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{backend.description}</span>{backend.detail && <span className="mt-1 flex items-start gap-1 text-xs text-[var(--warning)]"><AlertTriangle size={9} className="mt-0.5 shrink-0" />{backend.detail}</span>}</button>)}</div></div>}</> : <CapabilitySearchEmpty query={query} label="Toolset" />}
       </div>
     </div>
   );

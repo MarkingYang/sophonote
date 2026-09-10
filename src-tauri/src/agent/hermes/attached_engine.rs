@@ -171,6 +171,30 @@ impl AgentEngine for AttachedHermesEngine {
             persist_session_binding(binding, &stored_session_id)?;
         }
 
+        if envelope
+            .params
+            .run_skill
+            .as_ref()
+            .is_some_and(|skill| skill.name == "sophonote-computer-note")
+            || envelope.hermes_command.as_deref().is_some_and(|command| {
+                command.trim_start_matches('/').split_whitespace().next()
+                    == Some("sophonote-computer-note")
+            })
+        {
+            tokio::select! {
+                biased;
+                _ = envelope.cancel.cancelled() => {
+                    if let Some(emitter) = &emitter {
+                        let _ = emitter.emit(AgentEventPayload::RunCancelled { reason: "用户取消".into() });
+                    }
+                    let mut report = empty_report();
+                    report.outcome = "cancelled".into();
+                    return Ok(report);
+                }
+                result = super::super::computer_use::check_session_ready(&mut gateway, &runtime_session_id) => result?,
+            }
+        }
+
         let mut native_refs = Vec::new();
         let mut host_patch_context = None;
         let selection = envelope

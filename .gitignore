@@ -62,3 +62,6 @@ archify.tar.gz
 # Local code-analysis output
 graphify-out/
 **/graphify-out/
+
+# Generated embedded macOS computer-use component
+src-tauri/resources/computer-use/

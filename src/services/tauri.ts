@@ -1847,6 +1847,46 @@ export interface HermesCapabilities {
   browserUrl: string;
 }
 
+export interface ComputerUseStatus {
+  embedded?: boolean;
+  permissionOwner?: string | null;
+  installed: boolean;
+  platform: string;
+  platformSupported: boolean;
+  version: string | null;
+  ready: boolean | null;
+  canGrant: boolean;
+  accessibility: boolean | null;
+  screenRecording: boolean | null;
+  checks: { label: string; status: string; message: string }[];
+  error: string | null;
+}
+
+export type ComputerUseAction = 'install' | 'grant';
+export interface ComputerUseActionStatus {
+  running: boolean;
+  exitCode: number | null;
+  pid: number | null;
+}
+
+export async function computerUseStatus(): Promise<ComputerUseStatus> {
+  const res = await invoke<ApiResponse<ComputerUseStatus>>('agent_computer_use_status');
+  if (!res.success || !res.data) throw new Error(res.error || '读取电脑操作状态失败');
+  return res.data;
+}
+
+export async function computerUseActionStart(action: ComputerUseAction): Promise<ComputerUseActionStatus> {
+  const res = await invoke<ApiResponse<ComputerUseActionStatus>>('agent_computer_use_action_start', { action });
+  if (!res.success || !res.data) throw new Error(res.error || '启动电脑操作配置失败');
+  return res.data;
+}
+
+export async function computerUseActionStatus(action: ComputerUseAction): Promise<ComputerUseActionStatus> {
+  const res = await invoke<ApiResponse<ComputerUseActionStatus>>('agent_computer_use_action_status', { action });
+  if (!res.success || !res.data) throw new Error(res.error || '读取配置进度失败');
+  return res.data;
+}
+
 export interface HermesCommandInfo {
   name: string;
   description: string;

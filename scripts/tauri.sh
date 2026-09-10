@@ -9,6 +9,11 @@ TAURI="$ROOT/node_modules/.bin/tauri"
 test -x "$TAURI" || { echo "tauri CLI not found: $TAURI" >&2; exit 2; }
 
 COMMAND=${1:-}
+SOPHONOTE_ADHOC_DEBUG=0
+case " $* " in *" --debug "*) SOPHONOTE_ADHOC_DEBUG=1 ;; esac
+if test "$COMMAND" = build && test "$(uname -s)" = Darwin; then
+  sh "$SCRIPT_DIR/build-computer-use.sh"
+fi
 "$TAURI" "$@"
 
 test "$COMMAND" = build || exit 0
@@ -16,6 +21,12 @@ test "$(uname -s)" = Darwin || exit 0
 
 isolate_macos_app() {
   SOURCE_APP=$1
+  if test "$SOPHONOTE_ADHOC_DEBUG" = 1; then
+    # Sign the outer debug bundle too, so TCC can identify the actual App.
+    # Leave nested Hermes resources intact (their bytes are manifest-checked).
+    codesign --force --sign - --timestamp=none "$SOURCE_APP"
+    codesign --verify --deep --strict "$SOURCE_APP"
+  fi
   DEST_APP=$(printf '%s' "$SOURCE_APP" | sed 's|/bundle/macos/|/bundle.noindex/macos/|')
   DEST_DIR=$(dirname "$DEST_APP")
   mkdir -p "$DEST_DIR"

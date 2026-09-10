@@ -176,3 +176,5 @@ pnpm install:macos -- "$PWD/src-tauri/target/release/bundle.noindex/macos/SophoN
 The script checks the app name and Bundle ID, then replaces the old package entirely. It does not merge old directories and does not modify `~/Library/Application Support/com.fei.sophonote/`.
 
 Reproducible verification without local Apple credentials, notarization steps, and the clean-machine matrix are in [architecture §17](./docs/architecture.md#17-部署环境与基础设施) and [architecture §20](./docs/architecture.md#20-测试与验证方案) (Chinese).
+
+The macOS build also runs `scripts/build-computer-use.sh` to bundle the pinned Cua Driver 0.26.0 executable (macOS 13+). Its official archive is SHA-256 checked and cached under `src-tauri/target/computer-use-download/`; no standalone CuaDriver.app is installed. Permission onboarding belongs to SophoNote. For proxy contract checks, run `python3 scripts/test-computer-use-proxy.py`.

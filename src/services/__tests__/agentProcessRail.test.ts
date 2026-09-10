@@ -42,6 +42,11 @@ function event(seq: number, payload: AgentEventPayload, timestamp = seq * 1000):
 }
 
 describe('groupToolCardsByRunId / timelineToolCards', () => {
+  it('电脑操作只摘要动作与目标，不回显输入正文', () => {
+    const input = card({ name: 'computer_use', callId: 'computer', argumentsJson: JSON.stringify({ action: 'type', app: '文本编辑', text: 'private input' }) });
+    expect(toolDisplayName(input.name)).toBe('电脑操作');
+    expect(toolStepSummary(input)).toBe('输入 · 文本编辑');
+  });
   it('按 runId 归并，只读工具不进时间线，diff 富卡进时间线', () => {
     const cards: ToolCard[] = [
       card({ callId: 'c1', name: 'list_project_documents', startedAt: 1 }),

@@ -2400,6 +2400,18 @@ preview_sessions {
 
 自动测试至少覆盖 DTO/schema、路径 canonicalize/symlink、ignore/大文件、base hash 冲突、多文件 prepared 恢复、权限矩阵、Browser generation/控制权、Terminal 截断/取消、Preview 进程组回收。真实 Tauri 宿主测试必须覆盖 WKWebView 焦点/快捷键、200% 缩放、Chat/Browser/Editor/Diff/Terminal/Preview 切换、用户接管、登录站点不泄漏凭据和 App 完全退出后的子进程清理。
 
+### 23.9.9 Computer Use 适配
+
+Hermes `computer_use` 保持唯一 Agent 工具执行面。macOS 使用随包固定版本 cua-driver 的 embedded 模式：SophoNote Rust 主进程直接启动私有 daemon，保留 macOS TCC responsibility chain；由主 App 请求辅助功能和屏幕录制，权限归属必须为 `com.fei.sophonote`。禁止通过 LaunchServices 启动独立 CuaDriver.app，禁止由 Hermes Gateway 代为创建 daemon，禁止用改名或环境标签冒充已验证身份。非 macOS 暂保留原 Hermes 安装路径。
+
+控制组件随 macOS App 资源打包，构建脚本固定上游版本与下载 SHA-256，嵌套可执行文件先签名、主 App 后签名/公证。Hermes 仅获得受限代理入口和本轮 App 专用 socket；入口只允许版本/manifest 探测及连接已有 daemon 的 MCP，拒绝独立 serve、安装、升级与授权命令，不能回退到机器全局驱动。组件更新随 App 版本，不受 Hermes 私有更新槽替换。
+
+Host 负责启动互斥、子进程退出、私有 socket 目录清理、授权后的重新检测与重启；完整诊断在 Tauri `RunEvent::Ready` 后异步执行，不能阻塞 setup 首屏。上游固定版本需要 macOS 13+；子进程的配置 Home 独立放入 SophoNote runtime，避免覆盖全局驱动 PID/config。诊断只允许固定的只读身份/权限工具，白名单 DTO 不暴露 socket、原始窗口内容或任意命令。就绪须同时具备主 App 身份核实、驱动健康和权限，安装存在不代表授权成功。系统授权由用户操作，不能自动批准。当前 macOS 上 `CGRequestScreenCaptureAccess` 可能不自动生成录屏列表项；用户需在系统设置中通过 ＋ 添加实际 SophoNote.app。异常退出不重放未确认动作。
+
+统一 AI 面板按需装载电脑操作卡，独立展示工具启用与组件就绪，macOS 明示“为 SophoNote 授权”。能力配置仍走 `tools.configure`；执行前核实当前 Session 的真实工具集。随包 Gateway 的 `tools.configure(session_id)` 会清空 history，禁止用它刷新会话；旧 Session 不具备能力时明确要求新建，原历史保留。截图与动作属于现有 Hermes 工具结果/RunStore，不新建连续屏幕流。停止并接管复用 Run cancellation，终态前禁止重启，不宣称原地暂停恢复。
+
+首个笔记工作流由显式选择的随包 Skill 描述：先明确应用/窗口，读取后摘要，必要动作沿用 Hermes 审批；笔记编辑只修改本轮 Session 工作副本，终态经 baseVersion/TextAnchor/hunks、Diff 审阅与 DocumentService 落盘。Skill 是操作规约，不能代替驱动权限或 Host 写入校验。入口披露截图/可访问树可能进入当前模型请求。新 Skill 另随 App resource 分发，复用旧 Sidecar 或启用私有更新槽时仍获得新工作流。
+
 ### 23.10 模型配置与用量统计
 
 #### 23.10.1 配置真相源与供应商预设

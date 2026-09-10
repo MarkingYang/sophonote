@@ -428,6 +428,9 @@ pub fn run() {
             agent::commands::agent_hermes_skill_hub_preview, // Hermes Runtime Skills Hub 预览
             agent::commands::agent_hermes_skill_install, // Hermes Runtime Skills Hub 安装/重载
             agent::commands::agent_hermes_browser_manage, // Hermes Runtime Browser 连接管理
+            agent::computer_use::agent_computer_use_status,
+            agent::computer_use::agent_computer_use_action_start,
+            agent::computer_use::agent_computer_use_action_status,
             agent::commands::agent_hermes_mcp_add,      // Hermes Runtime MCP 新增/探测
             agent::commands::agent_hermes_mcp_set_enabled, // Hermes Runtime MCP 启停
             agent::commands::agent_hermes_mcp_test,     // Hermes Runtime MCP 连接探测
@@ -465,6 +468,10 @@ pub fn run() {
     // 有 PANIC 标记 = 进程内 panic；两者皆无且日志戛然而止 = 进程被异常杀死（崩溃/系统终止），
     // 此时去 Console.app → 崩溃报告 查 sophonote 的 .ips 报告
     app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Ready => {
+            tauri::async_runtime::spawn(agent::computer_use::macos::prime());
+        }
         tauri::RunEvent::ExitRequested { code, .. } => {
             println!("[sophonote] exit requested: code={:?}", code);
         }
@@ -480,6 +487,8 @@ pub fn run() {
                     child.shutdown();
                 }
             }
+            #[cfg(target_os = "macos")]
+            tauri::async_runtime::block_on(agent::computer_use::macos::shutdown());
             println!("[sophonote] process exiting");
         }
         _ => {}

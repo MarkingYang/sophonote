@@ -1,0 +1,30 @@
+#!/bin/sh
+# Hermes can only attach to the daemon owned by SophoNote. Never install,
+# launch a standalone app, or switch to an unrestricted runtime here.
+set -eu
+DRIVER_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+case "${1:-}" in
+  manifest)
+    printf '%s\n' '{"version":"0.26.0","mcp_invocation":{"command":"cua-driver","args":["mcp"]}}'
+    ;;
+  --version)
+    exec "$DRIVER_DIR/cua-driver" --version
+    ;;
+  --help)
+    printf '%s\n' 'SophoNote computer-use proxy: mcp [--no-overlay], manifest, --version'
+    ;;
+  mcp)
+    shift
+    for arg in "$@"; do
+      test "$arg" = --no-overlay || { echo 'SophoNote rejects driver launch overrides' >&2; exit 2; }
+    done
+    : "${SOPHONOTE_CUA_HOME:?SophoNote component home is missing}"
+    : "${SOPHONOTE_CUA_SOCKET:?Open computer use in SophoNote first}"
+    test -S "$SOPHONOTE_CUA_SOCKET" || { echo 'SophoNote computer-use service is unavailable; reopen its panel' >&2; exit 2; }
+    exec /usr/bin/env -i HOME="$SOPHONOTE_CUA_HOME" PATH=/usr/bin:/bin \
+      CUA_DRIVER_EMBEDDED=1 CUA_DRIVER_HOST_BUNDLE_ID=com.fei.sophonote \
+      CUA_DRIVER_RS_TELEMETRY_ENABLED=0 \
+      "$DRIVER_DIR/cua-driver" mcp --embedded --socket "$SOPHONOTE_CUA_SOCKET"
+    ;;
+  *) echo 'This component is managed by SophoNote; use its computer-use panel' >&2; exit 2 ;;
+esac

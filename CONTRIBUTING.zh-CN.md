@@ -176,3 +176,5 @@ pnpm install:macos -- "$PWD/src-tauri/target/release/bundle.noindex/macos/SophoN
 脚本校验应用名与 Bundle ID 后完整替换旧包，不合并旧目录，也不会修改 `~/Library/Application Support/com.fei.sophonote/`。
 
 本地无 Apple 凭据的可复现验证、公证步骤和干净机器矩阵见[架构 §17](./docs/architecture.md#17-部署环境与基础设施)与[架构 §20](./docs/architecture.md#20-测试与验证方案)。
+
+macOS 打包同时运行 `scripts/build-computer-use.sh`，内嵌固定的 Cua Driver 0.26.0 可执行文件（电脑操作要求 macOS 13+）。官方归档经 SHA-256 校验，缓存在 `src-tauri/target/computer-use-download/`；不安装独立 CuaDriver.app，系统权限由 SophoNote 申请。代理契约验证运行 `python3 scripts/test-computer-use-proxy.py`。

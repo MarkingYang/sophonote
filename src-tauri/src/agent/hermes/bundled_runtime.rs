@@ -26,6 +26,7 @@ const SOPHONOTE_OWNED_SKILLS: &[&str] = &[
     "sophonote-help",
     "sophonote-markdown-writing",
     "sophonote-note-persistence",
+    "sophonote-computer-note",
     "sophonote-ai-radar",
     "sophonote-openrouter-rankings",
     "archify",
@@ -231,14 +232,17 @@ async fn start_from_resource(
     }
     // 开发期自有 Skill 直接取仓库源：包内 seed 是构建期 overlay，容易落后于
     // 仓库迭代（曾导致 sidecar 播种融合前旧协议、打分趟缺失落库步骤）。
-    // Release 无此分支，信任构建脚本 overlay 后的包内 seed。
+    // 独立随 App 分发的新 Skill 优先于 Runtime seed，复用旧 Sidecar 打包时
+    // 也必须携带新的客户端工作流；其他 Skill 继续由原 seed 提供。
+    let app_owned_skills = app.path().resource_dir().map_err(|error| error.to_string())?
+        .join("sophonote-skills");
     #[cfg(debug_assertions)]
     let owned_override: Option<PathBuf> = {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skills/hermes/productivity");
-        repo.is_dir().then_some(repo)
+        Some(if repo.is_dir() { repo } else { app_owned_skills })
     };
     #[cfg(not(debug_assertions))]
-    let owned_override: Option<PathBuf> = None;
+    let owned_override: Option<PathBuf> = Some(app_owned_skills);
     seed_skills(
         &resource_root.join("seed/skills"),
         &hermes_home.join("skills"),
@@ -265,6 +269,7 @@ async fn start_from_resource(
     let stderr = log.try_clone().map_err(|error| error.to_string())?;
 
     let mut command = hermes_command(&launcher, &python);
+    command.envs(super::sidecar_update::system_proxy_environment());
     command
         .args([
             "serve",
@@ -296,6 +301,8 @@ async fn start_from_resource(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
+    #[cfg(target_os = "macos")]
+    crate::agent::computer_use::macos::configure(app, &mut command).await?;
     for (name, value) in provider_environment(app)? {
         command.env(name, value);
     }
@@ -1152,16 +1159,20 @@ wait "$CHILD_PID" 2>/dev/null || true
         std::fs::set_permissions(&script_path, permissions).unwrap();
 
         let mut watchdog = Command::new(&script_path).spawn().unwrap();
-        for _ in 0..40 {
-            if child_pid_path.exists() {
-                break;
+        // Wait for the observable ready signal, including a complete PID write.
+        // macOS can defer a newly created executable beyond one second under load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let descendant_pid = loop {
+            if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
+                if value.trim().parse::<u32>().is_ok() { break value.trim().to_string(); }
+            }
+            if std::time::Instant::now() >= deadline {
+                terminate_watchdog(&mut watchdog);
+                let _ = std::fs::remove_dir_all(&root);
+                panic!("watchdog fixture did not report readiness within 10 seconds");
             }
             std::thread::sleep(Duration::from_millis(25));
-        }
-        let descendant_pid = std::fs::read_to_string(&child_pid_path)
-            .unwrap()
-            .trim()
-            .to_string();
+        };
         terminate_watchdog(&mut watchdog);
 
         let descendant_alive = Command::new("/bin/kill")

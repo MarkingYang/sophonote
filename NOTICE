@@ -14,6 +14,13 @@ Hermes Agent
   binaries are not stored in git; they are produced by `pnpm hermes:bundle`.
   Redistribution of a packaged SophoNote.app must retain Hermes' MIT notice.
 
+Cua Driver
+  Copyright Cua AI, Inc. and contributors
+  Source: https://github.com/trycua/cua
+  SophoNote bundles version 0.26.0 as an embedded macOS control component.
+  The complete upstream license is retained in scripts/assets/LICENSE.cua
+  and in the packaged computer-use resources.
+
 CPython
   Copyright Python Software Foundation
   License: PSF License Agreement

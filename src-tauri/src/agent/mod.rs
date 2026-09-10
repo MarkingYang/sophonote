@@ -54,3 +54,4 @@ mod tests {
         assert_eq!(ENGINE_VERSION, "0.41.0");
     }
 }
+pub mod computer_use;
