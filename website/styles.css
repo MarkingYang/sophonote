@@ -943,6 +943,29 @@ img {
   transform: rotate(1.5deg);
 }
 
+.engine-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engine-options span {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.engine-options .selected {
+  color: var(--navy);
+  border-color: var(--gold);
+  background: var(--gold);
+  font-weight: 700;
+}
+
 .demo-top {
   display: flex;
   justify-content: space-between;
