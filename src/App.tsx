@@ -13,6 +13,7 @@ import GlobalSearch from './components/features/GlobalSearch';
 import PerfFixturePanel from './components/features/PerfFixturePanel';
 import { itemDetailLoader, pageLoaders, scheduleIdlePagePreloads } from './services/pagePreload';
 import { startHostGateWatcher, isHostGateInFlight } from './services/hostGateAutorun';
+import { safeUnlisten } from './services/browserErrors';
 import { mountedPageIds, rememberHeavyPage } from './services/pageKeepalive';
 import KeptAlivePage from './components/layout/KeptAlivePage';
 
@@ -138,7 +139,9 @@ function App() {
     );
 
     return () => {
-      unlisteners.forEach((p) => p.then((fn) => fn()));
+      unlisteners.forEach((p) => {
+        void p.then((fn) => safeUnlisten(fn)).catch(() => undefined);
+      });
     };
   }, []);
 

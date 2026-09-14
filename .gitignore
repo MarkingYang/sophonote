@@ -65,3 +65,6 @@ graphify-out/
 
 # Generated embedded macOS computer-use component
 src-tauri/resources/computer-use/
+
+# Generated pinned Pi standalone distributions
+src-tauri/resources/pi/

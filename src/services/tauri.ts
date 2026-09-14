@@ -2124,3 +2124,100 @@ export async function knowledgeVersionPreviewBaseline(): Promise<KnowledgeBaseli
   if (!res.success || !res.data) throw new Error(res.error ?? 'knowledge_version_preview_baseline failed');
   return res.data;
 }
+
+export interface OpenVikingConfig {
+  endpoint: string;
+  account: string;
+  user: string;
+  agent: string;
+}
+export interface OpenVikingStatus {
+  config: OpenVikingConfig;
+  activeProvider: string;
+  available: boolean;
+  keyConfigured: boolean;
+}
+export interface OpenVikingSaveResult {
+  credentialStorage: string | null;
+  restartRequired: boolean;
+}
+export async function getOpenVikingStatus(): Promise<OpenVikingStatus> {
+  const res = await invoke<ApiResponse<OpenVikingStatus>>('agent_openviking_status');
+  if (!res.success || !res.data) throw new Error(res.error ?? '无法读取 OpenViking 配置');
+  return res.data;
+}
+export async function saveOpenVikingConfig(config: OpenVikingConfig, apiKey: string, consent: boolean): Promise<OpenVikingSaveResult> {
+  const res = await invoke<ApiResponse<OpenVikingSaveResult>>('agent_openviking_save', {
+    request: { config, apiKey: apiKey.trim() || null, consent },
+  });
+  if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 配置保存失败');
+  return res.data;
+}
+export async function disableOpenViking(): Promise<OpenVikingSaveResult> {
+  const res = await invoke<ApiResponse<OpenVikingSaveResult>>('agent_openviking_disable');
+  if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 停用失败');
+  return res.data;
+}
+export async function testOpenVikingConnection(config: OpenVikingConfig, apiKey: string): Promise<{ version: string }> {
+  const res = await invoke<ApiResponse<{ version: string }>>('agent_openviking_test', {
+    request: { config, apiKey: apiKey.trim() || null },
+  });
+  if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 连接测试失败');
+  return res.data;
+}
+
+
+export interface PiRuntimeStatus { available: boolean; version: string; error: string | null; commands: boolean; browser: boolean; mcp: boolean; }
+export async function piRuntimeStatus(): Promise<PiRuntimeStatus> {
+  const result = await invoke<ApiResponse<PiRuntimeStatus>>('agent_pi_status');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 Pi 状态');
+  return result.data;
+}
+export async function piModelOptions(): Promise<HermesModelOptions> {
+  const result = await invoke<ApiResponse<HermesModelOptions>>('agent_pi_models');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 Pi 模型');
+  return result.data;
+}
+
+export async function claudeRuntimeStatus(): Promise<PiRuntimeStatus> {
+  const result = await invoke<ApiResponse<PiRuntimeStatus>>('agent_claude_status');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 Claude Code 状态');
+  return result.data;
+}
+export async function claudeModelOptions(): Promise<HermesModelOptions> {
+  const result = await invoke<ApiResponse<HermesModelOptions>>('agent_claude_models');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 Claude Code 模型');
+  return result.data;
+}
+
+export type UpdatableAgent = 'pi' | 'claude_code';
+export interface AgentUpdateProgress {
+  engine: UpdatableAgent;
+  phase: string;
+  state: 'running' | 'completed' | 'failed';
+  message: string;
+  bytesDownloaded: number | null;
+  totalBytes: number | null;
+}
+export interface AgentUpdateStatus {
+  engine: UpdatableAgent;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  source: string;
+  canUpdate: boolean;
+  message: string | null;
+  progress: AgentUpdateProgress | null;
+}
+export async function getAgentUpdateStatus(engine: UpdatableAgent, check = false): Promise<AgentUpdateStatus> {
+  const res = await invoke<ApiResponse<AgentUpdateStatus>>('agent_runtime_update_status', { engine, check });
+  if (!res.success || !res.data) throw new Error(res.error ?? '无法读取 Agent 更新状态');
+  return res.data;
+}
+export async function updateAgentRuntime(engine: UpdatableAgent): Promise<AgentUpdateStatus> {
+  const res = await invoke<ApiResponse<AgentUpdateStatus>>('agent_runtime_update', { engine });
+  if (!res.success || !res.data) throw new Error(res.error ?? 'Agent 更新失败');
+  return res.data;
+}
+export function listenAgentUpdateProgress(callback: (progress: AgentUpdateProgress) => void): Promise<UnlistenFn> {
+  return listen<AgentUpdateProgress>('sophonote:agent-update-progress', (event) => callback(event.payload));
+}

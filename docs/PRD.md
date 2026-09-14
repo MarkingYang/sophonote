@@ -10,7 +10,7 @@
 
 ## 1. 背景与问题定义
 
-SophoNote 是一款面向知识工作者的 macOS 本地优先 AI 工作环境，**Hermes Agent Runtime 是统一能力内核，SophoNote 是承载信息、知识、文档与行动的产品外壳**。目标用户包括白领、学生、研究员、独立开发者和其他需要持续处理信息、积累资料、生产文档的人。产品已经具备多源信息采集、证据化 AI 解读、Markdown 笔记、任务、语义搜索、AI 工作室、Agent、Skill 和 MCP 等能力，但当前能力仍以页面功能和项目 Chat 为中心，尚未形成“随时开始一项 Agent 工作”的统一产品心智。
+SophoNote 是一款面向知识工作者的 macOS 本地优先 AI 工作环境，**Hermes 与 Pi 是按会话选择的智能体执行内核，SophoNote 是承载信息、知识、文档与行动的产品外壳**。目标用户包括白领、学生、研究员、独立开发者和其他需要持续处理信息、积累资料、生产文档的人。产品已经具备多源信息采集、证据化 AI 解读、Markdown 笔记、任务、语义搜索、AI 工作室、Agent、Skill 和 MCP 等能力，但当前能力仍以页面功能和项目 Chat 为中心，尚未形成“随时开始一项 Agent 工作”的统一产品心智。
 
 当前一级导航展示：**发现、会话、工作室、笔记本、计划任务、工具**。收件箱保留在原来的**设置 → 收件箱**位置，不提升为一级导航；旧“知识库”页面停止展示，其现有信息条目处理、关键词/语义检索和索引能力合并到原收件箱。收件箱是严格保留 7 天的短期信息池。知识与记忆从此分层：**知识层隐藏在项目、笔记、资料和会话下面，负责检索、版本、证据与关系；记忆层属于 Hermes Agent，只保存被记住的目标、约束、偏好、决策与未完成状态。**未来可增加 `Artifacts` 展示项目、笔记、记忆摘要与成果的积累，但它只是来源对象的投影，不恢复旧知识库。其中：
 
@@ -140,7 +140,7 @@ SophoNote 是一款面向知识工作者的 macOS 本地优先 AI 工作环境�
 - 本地设置、macOS Keychain（含旧明文一次性迁移）、日志与自动测试。
 - 统一 SophoNote 数据根目录：SQLite、受控 Markdown、Agent 可操作工作空间、Hermes 私有状态与日志均在同一 Application Support 域内分区存放。设置「存储」页（分区展示、容量、孤儿清理、自定义根迁移）为低优先级，当前隐藏，不作为本期迭代。
 - Release 将钉扎的 Hermes Runtime 与 CPython 作为受控 sidecar 随 macOS `.app` / Windows NSIS 安装包分发；正式包不读取 PATH、`~/.hermes` 或开发 checkout，不允许外置 Runtime 回退。Debug 才允许显式附着本机 Hermes。
-- 设置提供独立的 Hermes Sidecar 更新面：用户显式点击“拉取更新”后，Host 从 NousResearch 官方稳定 Release 拉取源码，在 Application Support 私有目录构建隔离 Runtime，完成版本、commit、目标架构、关键导入与逐文件 hash 校验后才登记为待启用；当前进程不热替换，重启 SophoNote 后生效。新 Runtime 启动失败必须回退到随包版本，不得损坏已有 Hermes Home 或会话。
+- 设置提供统一的 Agent 配置更新面，其中 Hermes：用户显式点击“拉取更新”后，Host 从 NousResearch 官方稳定 Release 拉取源码，在 Application Support 私有目录构建隔离 Runtime，完成版本、commit、目标架构、关键导入与逐文件 hash 校验后才登记为待启用；当前进程不热替换，重启 SophoNote 后生效。新 Runtime 启动失败必须回退到随包版本，不得损坏已有 Hermes Home 或会话。
 
 ### 5.2 Out of Scope
 
@@ -440,7 +440,29 @@ flowchart LR
 | AG-23 | 会话与工作室首版代码工作区提供文件树/搜索、文本编辑、Git 状态与 Diff 审查；Agent 修改以 `CodeChangeSession` 记录 base/changes/actor/reason/runId，用户接受后写入授权工作树。代码文件不得复用 DocumentService Patch，笔记不得绕过 DocumentService | P1 目标 |
 | AG-24 | 代码闭环必须包含受控 Terminal 与 Browser。Browser 同时承担普通网页、localhost 和项目产物查看；PDF、图片和文本文件通过项目文件点击或拖入打开，不设置按文件类型拆分的独立入口。Agent 验证状态仍与普通人工浏览状态分开 | P1 基础已实现；Agent 验证待完成 |
 | AG-25 | 会话提供 `Plan / Ask before changes / Accept edits` 三种权限模式：Plan 禁止写入与命令；Ask 对写文件、命令和有副作用 Browser 操作逐次确认；Accept edits 仅放宽当前 WorkspaceBinding 内代码编辑，Terminal、跨目录、凭据、表单提交、下载与高风险 Browser 行为继续确认 | P1 目标 |
-| AG-26 | 设置的 Hermes Sidecar 页必须展示当前运行版本、待启用版本和官方更新源；“拉取更新”只能写应用私有的版本化槽位，完整校验后原子写入 pending 指针。更新期间必须持续展示当前阶段、总进度；下载阶段展示已下载字节与可得的百分比，依赖安装、导入校验、签名和哈希等长阶段也必须可见，禁止只显示无界转圈。当前会话不中断、不覆盖 `.app`/NSIS 内签名资源；成功明示“重启后生效”，失败保留最后阶段、显示可操作的网络/构建原因并保留旧版 | P1 |
+| AG-26 | 设置的 Agent 配置更新页中 Hermes 卡片必须展示当前运行版本、待启用版本和官方更新源；“拉取更新”只能写应用私有的版本化槽位，完整校验后原子写入 pending 指针。更新期间必须持续展示当前阶段、总进度；下载阶段展示已下载字节与可得的百分比，依赖安装、导入校验、签名和哈希等长阶段也必须可见，禁止只显示无界转圈。当前会话不中断、不覆盖 `.app`/NSIS 内签名资源；成功明示“重启后生效”，失败保留最后阶段、显示可操作的网络/构建原因并保留旧版 | P1 |
+
+#### 7.6.0 多执行引擎（AG-28 / DEC-053）
+
+新建会话可选择 Hermes 或 Pi Coding Agent；首次执行后引擎固定，历史会话缺省 Hermes，禁止在同一 Thread 上切换外部 Session 或静默回退。两套 sidecar 由 Rust 监督，共用会话 UI、RunStore、权限与 DocumentService；Pi 使用官方钉扎可执行包和 JSONL RPC，随应用分发，不依赖用户全局 Node/Pi。Pi 首版提供真实流式回复、工具事件、会话续接、取消、受控文件/命令以及文档工作副本 Patch（macOS 提供需逐次批准的命令；Windows 首版仅文件工具）。Hermes 的 Browser、电脑控制、Cron、MCP/Skill 管理面按引擎区分，不向 Pi 展示不支持的能力。供应商及密钥仍只在模型设置配置一次。三种引擎共用模型选择偏好与回复组件；切换引擎保持可用的当前模型，流式正文、思考、工具、错误和最终回复由 Rust 适配为同一事件契约，不维护独立聊天页面。引擎入口在已有会话中仍可打开；菜单采用紧凑宽度，仅显示 Hermes、Pi、Claude Code 三个名称及当前选中勾，不显示说明段落或「当前」「新建会话」文字。已绑定会话选择另一引擎时仍新建会话，保留原会话历史和当前未发送的文字、附件，不直接禁用整个入口。
+
+Claude Code 作为第三个会话引擎接入紧凑菜单（Hermes / Pi / Claude Code），首次执行后同样固定；从 Pi/Hermes 切换时保留原会话历史，新建目标引擎会话并携带未发送文字/附件。首版调用本机官方 Claude Code CLI（最低 2.1.233），不捆绑再分发或静默安装；缺失/旧版本提供明确提示。共用模型设置，展示 Anthropic 协议供应商与已配置的官方 DeepSeek 供应商及其模型白名单；DeepSeek 的 OpenAI 基址在 Claude Code 运行快照中适配为官方 `/anthropic` 接口，复用同一凭据，不要求重复配置，不改写用户保存的基址。模型列表只读取非密钥配置，凭据仅在实际发送所选供应商时读取；运行时与模型列表独立加载，超时明确提示并可重试；不复用个人订阅登录、全局插件或项目 hooks。提供流式回复、私有原生历史、取消、Rust 审批文件工具和 macOS 受控命令，文档修改仍通过工作副本生成待审阅 Diff。
+
+设置入口统一为「Agent 配置更新」，同页展示 Hermes、Pi、Claude Code 的版本、来源与更新策略。Hermes 保留私有待启用槽和重启生效；Pi 显式下载官方 stable 独立分发，校验官方 SHA-256、路径/平台/版本、宿主权限扩展和离线 RPC 能力后原子切换私有版本指针，下一轮使用，新旧槽互不覆盖，校验失败回退随包版本；当前运行不受影响。Claude Code 不再分发，由本机官方原生/npm 更新器或识别出的 Homebrew cask 更新，显示会影响本机 CLI；更新前拒绝存在 Claude 在途 Run，更新期间拒绝新 Claude Run，完成后复核版本，下一轮生效；未知安装方式展示官方指引，不自动安装或改写用户全局配置。页面独立读取各引擎，提供重试、阶段进度和失败原因；模型/会话数据不随更新迁移或删除。
+
+**分期范围（2026-09-14）：本轮先交付 Pi 接入；以下火山共享记忆为后续阶段，Pi 当前不加载 OpenViking 扩展。**
+
+火山 OpenViking Service 为可选共享记忆后端，通过 HTTPS 访问；不启动本地 OpenViking。SophoNote 统一保存非密钥连接配置和 Keychain 凭据，两套引擎读取同一服务连接；启用必须明确会话上传范围。同身份共享记忆与原生会话恢复分开，首版不承诺跨引擎会话迁移或 Hermes 原生插件未提供的项目隔离。
+
+验收：旧会话保持 Hermes；Pi 会话流式/工具/取消与重启续接；并发同 Thread 拒绝；Plan 无写命令、Ask 逐次审批、自动编辑仅放宽工作区文件；笔记仅通过带版本与锚点的 Patch；API Key 不落日志/配置/前端；托管连接检查保留 base path、Bearer 鉴权且拒绝重定向；未配置云端时可正常使用本地会话，云端不可用不伪报记忆成功。
+
+#### 7.6.1 OpenViking 可选记忆连接（AG-27）
+
+设置新增「OpenViking」，对接随包 Hermes 的原生 Memory Provider。用户填写已部署服务的地址、可选 API Key、账户、用户与 Agent 标识，可测试连接、保存并启用、停用及显式重启 Hermes。默认保持内置记忆；不安装或打包 OpenViking 服务，不扫描或导入 SophoNote 全库。此接入是 Hermes 外部记忆能力，不是隐藏知识层的 ContextStoreAdapter，Native Lite 与 1 GiB 资源门禁不变。
+
+启用前必须明确展示并由用户勾选：Hermes 原生插件会把启用后的会话发送到指定服务、自动提取记忆并跨会话召回；同一账户/用户/Agent 的会话可共享记忆，不承诺项目隔离。此显式选择是默认不逐轮沉淀规则的可选例外。停用切回 Hermes 内置记忆，保留远端数据，不调用删除或 reset。已有会话需结束后重启 Hermes；保存不自动中断在途工作。
+
+非密钥配置通过 Hermes 正式 Memory API 保存在私有 Home，API Key 通过 Host Keychain 保存（仅 Debug 可沿用开发回退），只在 Sidecar 启动时注入。读取只返回已配置状态。连接检查由 Rust 执行：匿名服务身份检查后再验证鉴权；错误保留 HTTP 状态且不回显响应正文/密钥。配置保存、凭据保存和 Runtime 生效分别反馈，不以配置启用冒充连接或召回已验证。
 
 ### 7.7 KNOW：知识组织与任务
 
@@ -1155,7 +1177,7 @@ P0 性能改造会影响 App 壳、store selector、编辑器保存/预览、Doc
 - **DEC-016（会话统一与项目归属，按 DEC-027 修订入口名）**：一级会话页、工作室/笔记本嵌入面板、工作室项目会话是同一 Thread/Run/Hermes Session 的不同视图；发现/收件箱/工具只做上下文交接。会话创建时可无项目，后续最多归属一个项目；归属不复制 Session，也不默认写入整段历史到项目长期记忆。
 - **DEC-017（全局 Agent 作用域）**：入口全局不代表权限全局。每轮发送冻结显式 ScopeSnapshot，工具集取页面/项目/用户授权交集；切页不改变在途 Run，有副作用能力进入 Policy/Approval/DocumentService。
 - **DEC-018（Agent 入口分层，按 DEC-027 修订入口名）**：Agent 能力全局可达但不全局常驻面板。会话页承载完整工作；工作室和笔记本提供嵌入面板；发现、收件箱和工具通过 ContextHandoff 进入会话；运行状态归属会话历史与消息，AppShell 不另设全局执行徽标。
-- **DEC-019（Hermes-only 与配置驱动模型路由）**：Hermes 是 SophoNote 唯一产品 Agent 引擎；移除 `agent.engine` 设置、Rig 生产分支与运行时回退。Composer 的右下角只承担模型选择，来源为当前激活供应商的 `model + models` 去重清单；切换供应商后自动切换默认模型，任何请求模型必须由 Rust 在该清单中复核后再发送 Hermes。
+- **DEC-019（由 DEC-053 扩展为多引擎）**：历史 Hermes-only 决策由按会话固定 Hermes/Pi/Claude Code 取代；移除 `agent.engine` 设置、Rig 生产分支与运行时回退。Composer 的右下角只承担模型选择，来源为当前激活供应商的 `model + models` 去重清单；切换供应商后自动切换默认模型，任何请求模型必须由 Rust 在该清单中复核后再发送 Hermes。
 - **DEC-020（SophoNote = Hermes Client Surface）**：产品代码不得写死 Agent 人设、回答格式、工具使用步骤、Skill 正文、工作区正文或短租约凭据作为 system instructions。用户消息按原文提交；图片/文件使用 Hermes 原生附件 RPC；Skill 使用 Hermes 原生发现/调用；Session/Memory/模型/取消/审批/澄清通过 Gateway RPC；SophoNote 领域对象仅以稳定引用和 Host 校验后的 MCP 能力暴露。必须展示 Hermes 真实事件，不能用“等待模型”或本地假步骤替代。
 - **DEC-021（统一数据根与双工作区边界）**：默认数据根固定为 `~/Library/Application Support/com.fei.sophonote/`。`sophonote.db`、`notes/`、`workspace/`、`hermes/<version>/`、`runtime/`、`logs/` 均从同一 Rust `StorageLayout` 解析。`workspace/` 内文件可由 Hermes 直接操作；`notes/` 仍由 DocumentService 独占写入。现有 DB/notes 已在该根目录，无需迁移；不得自动复制或移动机器级 `~/.hermes`，因为它可能属于 Hermes Desktop。自定义数据根只允许作为未来完整根目录 Tier-2 迁移，不再提供“仅迁 notes”的半迁移。
 - **DEC-024（知识版本与证据层）**：SophoNote 建立 Git Version & Provenance Layer，但不演进为通用 Git 客户端或第二套文档真相源。实时 `notes/` 仍由 DocumentService 独占；SophoNote 以管理的裸仓库存储笔记语义版本，工作室项目可关联用户授权仓库。SQLite 保存 Repository/DocumentVersion/EvidenceAnchor/Claim/ChangeImpact 查询投影，Git 保存文本版本事实；Hermes 仍保存长期 Memory 正文。正式知识必须绑定确定版本，Working Tree 只能作为显式临时上下文，历史恢复必须形成新 Patch/Commit。

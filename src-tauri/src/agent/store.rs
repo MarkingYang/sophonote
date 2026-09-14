@@ -164,6 +164,7 @@ impl RunStore {
             archived_at: row.get(8)?,
             pinned_at: row.get(9)?,
             collection_id: row.get(10)?,
+            engine: row.get(11)?,
         })
     }
 
@@ -200,7 +201,7 @@ impl RunStore {
 
     /// 获取指定 Thread
     pub fn get_thread(&self, id: &str) -> Result<Option<AgentThread>, RunStoreError> {
-        let sql = "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id FROM agent_threads WHERE id = ?1";
+        let sql = "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine FROM agent_threads WHERE id = ?1";
         let mut stmt = self.conn.prepare(sql)?;
         let row = stmt
             .query_row(rusqlite::params![id], Self::map_thread_row)
@@ -261,11 +262,11 @@ impl RunStore {
         };
         let sql = match project_id {
             Some(_pid) => format!(
-                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id \
+                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
                  FROM agent_threads WHERE project_id = ?1 AND {scope_sql} ORDER BY updated_at DESC"
             ),
             None => format!(
-                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id \
+                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
                  FROM agent_threads WHERE project_id IS NULL AND {scope_sql} ORDER BY updated_at DESC"
             ),
         };
@@ -289,7 +290,8 @@ impl RunStore {
         let has_user = msgs
             .iter()
             .any(|m| m.role == "user" && !m.content.trim().is_empty());
-        if !has_user {
+        let sidecar_history = self.get_thread(id)?.is_some_and(|t| matches!(t.engine.as_str(), "pi" | "claude_code") && t.latest_run_id.is_some());
+        if !has_user && !sidecar_history {
             self.delete_thread(id)?;
             return Ok(false);
         }
@@ -599,6 +601,28 @@ impl RunStore {
                 run.updated_at,
             ],
         )?;
+        Ok(())
+    }
+
+    /// Atomically serialize engine binding and Run creation across sidecar adapters.
+    pub fn with_run_claim(
+        &self, thread_id: &str, engine: &str,
+        create: impl FnOnce() -> Result<(), RunStoreError>,
+    ) -> Result<(), RunStoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        // Acquire the write lock before inspecting the binding or active Runs.
+        tx.execute("UPDATE agent_threads SET engine=engine WHERE id=?1", [thread_id])?;
+        let thread = self.get_thread(thread_id)?.ok_or_else(|| RunStoreError::Generic("会话不存在".into()))?;
+        if thread.latest_run_id.is_some() && thread.engine != engine {
+            return Err(RunStoreError::Generic("已有会话不能切换引擎".into()));
+        }
+        let active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE thread_id=?1 AND lower(trim(status,'\"')) IN ('queued','running','waiting_approval'))",
+            [thread_id], |row| row.get(0))?;
+        if active { return Err(RunStoreError::Generic("此会话上一轮尚未结束或需要恢复".into())); }
+        tx.execute("UPDATE agent_threads SET engine=?1 WHERE id=?2", rusqlite::params![engine,thread_id])?;
+        create()?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1261,7 +1285,7 @@ mod tests {
             project_id TEXT, latest_run_id TEXT, external_session_id TEXT,
             created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
             closed_at INTEGER, archived_at INTEGER,
-            pinned_at INTEGER, collection_id TEXT
+            pinned_at INTEGER, collection_id TEXT, engine TEXT NOT NULL DEFAULT 'hermes'
         );
         CREATE TABLE IF NOT EXISTS thread_collections (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -1342,6 +1366,25 @@ mod tests {
                 .as_deref(),
             Some("sophonote-t-hermes")
         );
+    }
+
+    #[test]
+    fn run_claim_locks_engine_rejects_overlap_and_rolls_back() {
+        let store = test_store();
+        store.create_thread("bound", "", None, 1).unwrap();
+        let create = || {
+            store.create_run("first", "bound", None, "p", "m", None, 6, 2)?;
+            store.set_latest_run_id("bound", "first", 2)
+        };
+        store.with_run_claim("bound", "pi", create).unwrap();
+        assert_eq!(store.get_thread("bound").unwrap().unwrap().engine, "pi");
+        assert!(store.with_run_claim("bound", "pi", || Ok(())).is_err());
+        store.update_run_status("first", &RunStatus::Completed, 3).unwrap();
+        assert!(store.with_run_claim("bound", "hermes", || Ok(())).is_err());
+        assert!(store.close_thread("bound", 4).unwrap()); // Attachment-only Pi history is retained.
+        store.create_thread("draft", "", None, 1).unwrap();
+        assert!(store.with_run_claim("draft", "pi", || Err(RunStoreError::Generic("fixture".into()))).is_err());
+        assert_eq!(store.get_thread("draft").unwrap().unwrap().engine, "hermes");
     }
 
     #[test]
@@ -2333,7 +2376,7 @@ mod transport_tests {
             project_id TEXT, latest_run_id TEXT,
             created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
             closed_at INTEGER, archived_at INTEGER,
-            pinned_at INTEGER, collection_id TEXT
+            pinned_at INTEGER, collection_id TEXT, engine TEXT NOT NULL DEFAULT 'hermes'
         );
         CREATE TABLE IF NOT EXISTS agent_runs (
             id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, project_id TEXT,

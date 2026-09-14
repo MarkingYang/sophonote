@@ -406,6 +406,16 @@ pub fn run() {
             agent::commands::agent_hermes_model_catalog, // 设置页 Runtime 完整发现目录
             agent::commands::agent_hermes_usage,   // Hermes Runtime 精确 Token/调用用量
             agent::commands::agent_hermes_capabilities, // Hermes Runtime Skill/Tool/MCP/Browser 快照
+            agent::pi::agent_pi_status,
+            agent::runtime_updates::agent_runtime_update_status,
+            agent::runtime_updates::agent_runtime_update,
+            agent::claude::agent_claude_status,
+            agent::claude::agent_claude_models,
+            agent::pi::agent_pi_models,
+            agent::openviking::agent_openviking_status,
+            agent::openviking::agent_openviking_save,
+            agent::openviking::agent_openviking_disable,
+            agent::openviking::agent_openviking_test,
             agent::commands::restart_hermes_runtime,    // 手动重启 Hermes Runtime（前端重连）
             agent::commands::agent_hermes_session_surface, // 会话占用条与 YOLO 状态
             agent::commands::agent_hermes_session_set_yolo, // 本轮 Hermes YOLO

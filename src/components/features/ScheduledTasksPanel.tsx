@@ -39,6 +39,7 @@ import {
   type HermesCronRunStatus,
   type HermesModelOptions,
 } from '../../services/tauri';
+import { subscribeTauriListener } from '../../services/browserErrors';
 import {
   cachedScheduledJobs,
   scheduledJobsCacheHydrated,
@@ -857,20 +858,11 @@ export default function ScheduledTasksPanel() {
     return () => globalThis.clearInterval(timer);
   }, [load, refreshModelOptions]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void listenHermesStatusChanged((status) => {
+  useEffect(() => subscribeTauriListener(
+    listenHermesStatusChanged((status) => {
       if (status === 'connected') void refreshModelOptions();
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [refreshModelOptions]);
+    }),
+  ), [refreshModelOptions]);
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();

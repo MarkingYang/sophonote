@@ -49,6 +49,7 @@
     ],
     "resources": {
       "resources/hermes/": "hermes/",
+      "resources/pi/": "pi/",
       "../skills/hermes/productivity/sophonote-computer-note/": "sophonote-skills/sophonote-computer-note/"
     },
     "macOS": {

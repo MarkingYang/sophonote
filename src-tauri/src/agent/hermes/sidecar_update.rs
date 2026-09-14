@@ -211,7 +211,7 @@ impl ProgressReporter {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct NetworkContext {
+pub(crate) struct NetworkContext {
     used_macos_fixed_proxy: bool,
     macos_pac_enabled: bool,
 }
@@ -519,7 +519,7 @@ fn validate_release_ref_chain(
     }
 }
 
-fn build_download_client() -> Result<(reqwest::Client, NetworkContext), String> {
+pub(crate) fn build_download_client() -> Result<(reqwest::Client, NetworkContext), String> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(600))

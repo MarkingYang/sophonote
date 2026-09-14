@@ -23,6 +23,7 @@ import {
   type BrowserFileKind,
 } from '../../services/browserNavigation';
 import NativeBrowserSurface from './NativeBrowserSurface';
+import { subscribeTauriListener } from '../../services/browserErrors';
 
 interface AgentBrowserPanelProps {
   onAddToChat: (target: BrowserTarget) => void;
@@ -127,18 +128,11 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
 
   useEffect(() => {
     if (currentUrl || !isTauri()) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === 'drop') openDroppedFiles(event.payload.paths);
-    }).then((nextUnlisten) => {
-      if (disposed) nextUnlisten();
-      else unlisten = nextUnlisten;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return subscribeTauriListener(
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === 'drop') openDroppedFiles(event.payload.paths);
+      }),
+    );
   }, [currentUrl, openDroppedFiles]);
 
   const moveHistory = (next: number) => {

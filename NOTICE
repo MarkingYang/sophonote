@@ -14,6 +14,14 @@ Hermes Agent
   binaries are not stored in git; they are produced by `pnpm hermes:bundle`.
   Redistribution of a packaged SophoNote.app must retain Hermes' MIT notice.
 
+Pi Coding Agent
+  Copyright (c) 2025 Mario Zechner
+  License: MIT
+  Source: https://github.com/earendil-works/pi
+  SophoNote bundles the official pinned 0.85.1 standalone runtime via
+  `pnpm pi:bundle`. Its license is retained in scripts/assets/LICENSE.pi
+  and the packaged Pi resources.
+
 Cua Driver
   Copyright Cua AI, Inc. and contributors
   Source: https://github.com/trycua/cua

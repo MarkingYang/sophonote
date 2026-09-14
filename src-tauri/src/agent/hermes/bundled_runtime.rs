@@ -303,6 +303,31 @@ async fn start_from_resource(
         .stderr(Stdio::from(stderr));
     #[cfg(target_os = "macos")]
     crate::agent::computer_use::macos::configure(app, &mut command).await?;
+    // OpenViking 非密钥值由 Hermes config.yaml 持有；禁止继承机器级覆盖。
+    for name in [
+        "OPENVIKING_ENDPOINT",
+        "OPENVIKING_ACCOUNT",
+        "OPENVIKING_USER",
+        "OPENVIKING_AGENT",
+        "OPENVIKING_CLI_CONFIG_FILE",
+    ] {
+        command.env_remove(name);
+    }
+    let memory_config: serde_json::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(hermes_home.join("config.yaml"))
+            .map_err(|_| "读取 Hermes 记忆配置失败")?,
+    )
+    .map_err(|_| "解析 Hermes 记忆配置失败")?;
+    let openviking_key = if memory_config
+        .pointer("/memory/provider")
+        .and_then(serde_json::Value::as_str)
+        == Some("openviking")
+    {
+        crate::commands::get_cached_api_key(app, crate::agent::openviking::KEYCHAIN_PROVIDER)?
+    } else {
+        String::new()
+    };
+    command.env("OPENVIKING_API_KEY", openviking_key);
     for (name, value) in provider_environment(app)? {
         command.env(name, value);
     }

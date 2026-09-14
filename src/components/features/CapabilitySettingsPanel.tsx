@@ -7,6 +7,7 @@ import {
   type HermesCapabilities,
   type HermesConnectionStatus,
 } from '../../services/tauri';
+import { subscribeTauriListener } from '../../services/browserErrors';
 import {
   HermesCapabilitiesPanel,
   type CapabilityTab,
@@ -80,14 +81,12 @@ export default function CapabilitySettingsPanel() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
+  useEffect(() => subscribeTauriListener(
     listenHermesStatusChanged((status) => {
       setConnStatus(status);
       if (status === 'connected') refresh();
-    }).then((next) => { unlisten = next; });
-    return () => { unlisten?.(); };
-  }, [refresh]);
+    }),
+  ), [refresh]);
 
   const reconnect = useCallback(() => {
     setConnStatus('restarting');

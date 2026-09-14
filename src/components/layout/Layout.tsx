@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PanelLeftOpen } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getSetting, updateSetting } from '../../services/tauri';
+import { safeUnlisten } from '../../services/browserErrors';
 import Sidebar from './Sidebar';
 import VerticalResizeHandle from '../ui/VerticalResizeHandle';
 
@@ -41,7 +42,7 @@ export default function Layout({ children }: LayoutProps) {
     const unlisten = win.onResized(sync);
     return () => {
       alive = false;
-      unlisten.then((off) => off()).catch(() => {});
+      unlisten.then((off) => safeUnlisten(off)).catch(() => {});
     };
   }, []);
 

@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { usePageSurfaceActive } from '../layout/KeptAlivePage';
 import { nativeWebviewLayout } from '../../services/nativeWebviewLayout';
+import { subscribeTauriListener } from '../../services/browserErrors';
 
 interface NativeBrowserSurfaceProps {
   url: string;
@@ -34,7 +35,7 @@ export default function NativeBrowserSurface({ url, onError, onFileDrop }: Nativ
     let disposed = false;
     let created = false;
     let frameRequest = 0;
-    let unlistenDrop: (() => void) | undefined;
+    let stopDrop: (() => void) | undefined;
     const label = `sophonote_browser_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const initial = nativeWebviewLayout(pageActiveRef.current, host.getBoundingClientRect());
     const webview = new Webview(getCurrentWindow(), label, {
@@ -74,14 +75,14 @@ export default function NativeBrowserSurface({ url, onError, onFileDrop }: Nativ
       onError(null);
       syncBounds();
     });
-    void webview.onDragDropEvent((event) => {
-      if (event.payload.type === 'drop') onFileDrop?.(event.payload.paths);
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlistenDrop = unlisten;
-    }).catch((dropError) => {
-      if (!disposed) onError(`文件拖放不可用：${String(dropError)}`);
-    });
+    stopDrop = subscribeTauriListener(
+      webview.onDragDropEvent((event) => {
+        if (event.payload.type === 'drop') onFileDrop?.(event.payload.paths);
+      }),
+      (dropError) => {
+        if (!disposed) onError(`文件拖放不可用：${String(dropError)}`);
+      },
+    );
     void webview.once('tauri://error', (event) => {
       if (!disposed) onError(`内容打开失败：${String(event.payload)}`);
     });
@@ -98,7 +99,7 @@ export default function NativeBrowserSurface({ url, onError, onFileDrop }: Nativ
       window.removeEventListener('resize', syncBounds);
       window.removeEventListener('scroll', syncBounds, true);
       cancelAnimationFrame(frameRequest);
-      unlistenDrop?.();
+      stopDrop?.();
       if (created) void webview.close().catch(() => undefined);
     };
   }, [onError, onFileDrop, url]);

@@ -10,6 +10,7 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../../services/tauri';
+import { safeUnlisten } from '../../services/browserErrors';
 import type { WorkspacePermissionMode } from '../../services/workspaceBinding';
 
 interface LocalTerminalProps {
@@ -149,8 +150,8 @@ export default function LocalTerminal({ root, permissionMode, clearToken = 0, on
       cancelAnimationFrame(resizeFrame);
       resizeObserver?.disconnect();
       inputDisposable?.dispose();
-      unlistenOutput?.();
-      unlistenExit?.();
+      safeUnlisten(unlistenOutput);
+      safeUnlisten(unlistenExit);
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = null;
       if (sessionId) void closeLocalTerminal(sessionId).catch(() => {});

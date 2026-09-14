@@ -30,6 +30,7 @@ rustc --version
 
 ```bash
 pnpm install
+pnpm pi:bundle
 ./scripts/sophonote.sh start
 pnpm exec tsc --noEmit
 pnpm test --run
@@ -53,6 +54,9 @@ cargo test --all-targets
 ```
 
 On a real Hermes path, `logs/dev.log` should show `resolve=Use(Hermes)` and `surface=gateway`. Acceptance must cover session create/resume, Skills, attachments, approval/clarify, cancel, and a final answer. A reachable port is not enough.
+
+
+Build the official Pi 0.85.1 standalone distribution with `pnpm pi:bundle` (Python 3.12+). A global Pi or Node runtime is not required by the app. Run this before starting the development host and after editing `scripts/assets/pi-policy.ts`. Archives are cached in `src-tauri/target/pi-downloads/`; bundled files are generated under `src-tauri/resources/pi/<target>/`. Pack/release scripts build Pi automatically. Native RPC regression tests use a local model fixture: `cd src-tauri && cargo test --lib agent::pi:: -- --include-ignored`; they do not contact real providers. The first Windows x64 integration disables shell tools. Both platforms still require their own host acceptance.
 
 ## Website
 

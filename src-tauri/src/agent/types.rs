@@ -37,6 +37,8 @@ pub enum ThreadStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentThread {
+    #[serde(default = "default_thread_engine")]
+    pub engine: String,
     pub id: String,
     /// 标题（用户可编辑）
     pub title: String,
@@ -62,9 +64,12 @@ pub struct AgentThread {
     pub collection_id: Option<String>,
 }
 
+fn default_thread_engine() -> String { "hermes".into() }
+
 impl AgentThread {
     pub fn new(id: String, title: String, project_id: Option<String>, now_ms: u64) -> Self {
         Self {
+            engine: default_thread_engine(),
             id,
             title,
             status: ThreadStatus::Running,

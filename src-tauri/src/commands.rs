@@ -1430,7 +1430,10 @@ pub async fn keychain_save_api_key(
 
     // OpenRouter 排名凭据由 SophoNote Bridge 在每次刷新时直接从 Host 读取，
     // 不注入 Hermes Provider 环境；保存它不应中断正在运行的会话或计划任务。
-    if provider == crate::openrouter_rankings::KEYCHAIN_PROVIDER {
+    // OpenViking 凭据也只保存，由设置面独立提示用户在空闲时重启生效。
+    if provider == crate::openrouter_rankings::KEYCHAIN_PROVIDER
+        || provider == crate::agent::openviking::KEYCHAIN_PROVIDER
+    {
         return ApiResponse::ok(format!("saved:{storage}"));
     }
 

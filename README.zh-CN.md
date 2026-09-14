@@ -4,9 +4,9 @@
 
 官方网站：[sophonote.com](https://sophonote.com) · [GitHub Releases](https://github.com/MarkingYang/sophonote/releases)
 
-SophoNote 是围绕开源 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 构建的 macOS 本地优先 AI 知识工作台。笔记、发现、权限和文档审阅留在 SophoNote，Hermes 专注 Agent 运行时。它不是 Hermes Desktop 的分叉，也不复刻其界面。
+SophoNote 是使用开源 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 和 [Pi](https://github.com/earendil-works/pi) 作为可选执行引擎的 macOS 本地优先 AI 知识工作台，也支持本机安装的 Claude Code。笔记、发现、权限和文档审阅留在 SophoNote。它不是 Hermes Desktop 的分叉，也不复刻其界面。
 
-SophoNote 是钉扎 Hermes Sidecar 外围的 **Client Surface**：
+SophoNote 是钉扎智能体 Sidecar 外围的 **Client Surface**：
 
 - Hermes 负责执行、模型调用、Skill、MCP 连接与长期记忆。
 - SophoNote 拥有笔记、发现、权限、审批、文件和审计。
@@ -27,7 +27,7 @@ SophoNote 是钉扎 Hermes Sidecar 外围的 **Client Surface**：
 | 入口 | 作用 |
 |---|---|
 | 发现 | 看经过筛选和解读的 AI 动态、日报与模型榜 |
-| 会话 | 以任务为单位使用 Hermes；可临时绑定本地目录 |
+| 会话 | 以任务为单位使用 Hermes、Pi 或 Claude Code；可临时绑定本地目录 |
 | 工作室 | 面向真实本地项目的 IDE 工作面：文件、搜索、变更、终端、浏览器与右侧 Agent |
 | 笔记本 | 编辑 Markdown；进入页面不会创建文档，只有显式“新建笔记”、模板或“导入功能范例”才创建 |
 | 计划任务 | 管理本机保留的 Hermes 定时任务与运行历史；可从脱敏范例开始，范例和未配置模型的任务默认暂停 |
@@ -71,6 +71,13 @@ pnpm install
 启停只用 `scripts/sophonote.sh`，不要前台常驻 `pnpm tauri dev`。仅前端改动依赖 Vite HMR；改了 Rust 或 Tauri 契约再用 `./scripts/sophonote.sh restart`。
 
 Hermes 以钉扎 Sidecar（Hermes 0.20.0 + CPython 3.11）随应用分发。Release 只启动包内 Runtime。二进制不入库：贡献者如何构建 sidecar、附着外部 Gateway、打包和公证，见 [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)。
+
+
+新会话也可在输入框下方选择 **Pi**（首次发送后固定引擎）。Pi 0.85.1 以独立可执行程序分发，复用「设置 → AI 模型」中的 OpenAI 兼容 / Anthropic 配置；源码开发先运行 `pnpm pi:bundle`（Python 3.12+，首次下载需要网络）。支持流式回复、会话续接、取消、文件审批和文档 Diff；macOS 命令需逐次批准。Pi 首版暂不提供 Hermes 的浏览器、电脑控制、Skill/MCP 管理或 OpenViking 记忆。
+
+同一菜单还可选择 **Claude Code**。需本机安装官方 [Claude Code CLI](https://code.claude.com/docs/en/setup) 2.1.233 或更新版本；应用自动识别常见安装位置，也可通过宿主环境变量 `SOPHONOTE_CLAUDE_BIN` 指定绝对路径。它共用 AI 模型设置中的 Anthropic 协议供应商及官方 DeepSeek 配置（DeepSeek 自动适配官方 Anthropic 端点，无需另配密钥），隔离原生历史，工具由 Rust 宿主管控，不复用个人订阅登录或全局插件；CLI 不随应用再分发。已有会话切换引擎时新建会话，并保留未发送文字与附件。
+
+引擎更新统一位于 **设置 → Agent 配置更新**。Hermes 在私有目录准备版本，重启应用后生效；Pi 校验官方稳定版归档和宿主权限扩展后启用私有版本槽，后续运行使用；Claude Code 调用识别出的原生/npm 更新器或原 Homebrew cask，自定义安装显示手动指引。更新保留模型配置与会话历史。
 
 ## 贡献与安全
 

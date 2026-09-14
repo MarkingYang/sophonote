@@ -742,6 +742,7 @@ fn create_agent_tables(conn: &rusqlite::Connection) -> Result<(), String> {
             // Hermes 会话映射：一个 SophoNote Thread 固定绑定一个 Hermes Session。
             // 仅保存外部引用；消息与长期记忆内容仍由各自真相源维护。
             ("external_session_id", "external_session_id TEXT"),
+            ("engine", "engine TEXT NOT NULL DEFAULT 'hermes'"),
             ("closed_at", "closed_at INTEGER"),
             ("archived_at", "archived_at INTEGER"),
             // 置顶/收藏夹：组织性操作列，NULL = 未置顶/未收藏
@@ -905,6 +906,16 @@ pub fn delete_articles_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_threads_default_to_hermes_without_losing_session_binding() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE agent_threads (id TEXT PRIMARY KEY,title TEXT,status TEXT,project_id TEXT,latest_run_id TEXT,external_session_id TEXT,created_at INTEGER,updated_at INTEGER); INSERT INTO agent_threads VALUES ('legacy','保留标题','completed',NULL,'run','native-session',1,2);").unwrap();
+        create_schema(&conn).unwrap();
+        create_schema(&conn).unwrap();
+        let row: (String,String,String) = conn.query_row("SELECT engine,title,external_session_id FROM agent_threads WHERE id='legacy'",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!(row,("hermes".into(),"保留标题".into(),"native-session".into()));
+    }
 
     #[test]
     fn legacy_items_gain_immutable_seven_day_ttl_and_ledger() {

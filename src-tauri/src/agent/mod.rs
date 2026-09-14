@@ -55,3 +55,12 @@ mod tests {
     }
 }
 pub mod computer_use;
+
+pub mod openviking;
+
+/// DEC-053：受 Rust 监督的 Pi JSONL 执行引擎。
+pub mod pi;
+
+pub mod claude;
+
+pub mod runtime_updates;

@@ -56,7 +56,10 @@ export type RunStatus =
   | 'interrupted';
 
 /** Thread（话题容器） */
+export type AgentEngine = 'hermes' | 'pi' | 'claude_code';
+
 export interface AgentThread {
+  engine?: AgentEngine;
   id: string;
   title: string;
   status: ThreadStatus;
@@ -443,6 +446,7 @@ interface AgentState {
    * 有值时只随 run_started 事件回传，供 Surface 展示和审计。
    * skill 经 Hermes command.dispatch 激活原生 Skill；SophoNote 不注入正文。
    * focusDocument 是当前 Surface 明示的文档范围，Rust 将其转为原生附件。 */
+  lastStartError: string | null;
   startRun: (
     threadId: string | null,
     message: string,
@@ -457,6 +461,7 @@ interface AgentState {
     includeProjectContext?: boolean,
     workspaceRoot?: string | null,
     workspacePermissionMode?: WorkspacePermissionMode,
+    engine?: AgentEngine,
   ) => Promise<{ threadId: string; runId: string } | null>;
   /** 处理事件（reducer 模式） */
   handleEvent: (event: AgentEvent) => void;
@@ -1142,6 +1147,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
   },
 
+  lastStartError: null,
   startRun: async (
     threadId,
     message,
@@ -1156,7 +1162,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     includeProjectContext = false,
     workspaceRoot,
     workspacePermissionMode = 'ask',
+    engine,
   ) => {
+    set({ lastStartError: null });
     // ISSUE-019：同一 Thread 的历史仍在恢复或上一轮尚未终态时，状态层硬拒
     // 下一轮。不能只依赖 Composer disabled，否则快捷键/异步竞态仍可绕过。
     if (
@@ -1244,6 +1252,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             includeProjectContext,
             workspaceRoot: workspaceRoot ?? null,
             workspacePermissionMode,
+            engine: engine ?? null,
           },
           onEvent: channel,
         }
@@ -1251,6 +1260,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
       if (!result.success) {
         flushPendingEvents();
+        set({ lastStartError: result.error ?? '无法启动智能体' });
         console.error('Failed to start run:', result.error);
         return null;
       }
@@ -1283,6 +1293,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           ? state.threads.map((item) => item.id === result.data.threadId
             ? {
                 ...item,
+                engine: engine ?? item.engine ?? 'hermes',
                 status: threadStatus,
                 latestRunId: result.data.runId,
                 updatedAt: now,
@@ -1292,6 +1303,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
               ...state.threads,
               {
                 id: result.data.threadId,
+                engine: engine ?? 'hermes',
                 title: '新会话',
                 status: threadStatus,
                 projectId: projectId ?? null,
@@ -1319,6 +1331,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       return result.data;
     } catch (e) {
       flushPendingEvents();
+      set({ lastStartError: e instanceof Error ? e.message : String(e) });
       console.error('Failed to start run:', e);
       return null;
     }

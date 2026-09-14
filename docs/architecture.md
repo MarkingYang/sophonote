@@ -959,6 +959,27 @@ Debug 构建可显式设置 `SOPHONOTE_HERMES_GATEWAY_URL/TOKEN` 附着本机 Ru
 
 下次 SophoNote 启动优先验证 pending，健康检查成功后才原子提升为 `active.json`；失败则标记该版本为 failed、清除 pending 并立即用包内钉扎 Runtime 重试。active 后续启动失败同样 fail-safe 回退包内版本。Hermes Home 继续按 Runtime semver 隔离；更新槽只替换执行平面，不删除或覆盖任何会话、Keychain 或 SophoNote 数据。
 
+设置导航与标题统一为「Agent 配置更新」。Pi 使用 `runtime/pi-sidecar/versions/<version>-<digest>` 私有不可变槽：只接受 earendil-works/pi 官方 stable Release 的固定平台资产及 SHA-256 digest，下载/解包有大小和路径门禁，拒绝链接，加入当前宿主权限扩展并验证离线 RPC `sophonote_host_ready` 能力后生成文件哈希；原子写 active 指针，后续 Run 重新解析并校验，现有 Run 持有旧绝对路径。损坏指针/资源不影响随包执行且在状态中保留回退原因，不因模型请求失败自动降级历史。Claude Code 更新与启动共用进程内互斥门禁，更新前查询未终态 Claude Run，阻止并发 claim；根据规范路径识别官方 native launcher、npm/pnpm 官方包或 Homebrew cask，使用固定 argv 调用官方更新器，有时限且不继承模型密钥，结束后重新定位并校验 CLI 版本。自定义路径/未识别安装不猜测执行包管理器。两者通过同一 Host DTO 和进度事件投影到设置卡片，Hermes 原更新契约保持兼容。
+
+#### 17.5.2a 多执行 sidecar 与火山 OpenViking（DEC-053）
+
+`agent_threads.engine` 缺省 `hermes`，首次 Run 前可选择 `pi`，首次 Run 后不可修改。Run 始终记录实际引擎；模型配置共用 Host ProviderSnapshot/Keychain。三种引擎共用模型选择偏好与回复组件；切换引擎保持可用的当前模型，流式正文、思考、工具、错误和最终回复由 Rust 适配为同一事件契约，不维护独立聊天页面。Hermes 保留 Gateway WS，Pi 使用官方 0.85.1 可执行分发的 stdin/stdout JSONL RPC；适配器将真实事件写入现有 DurableFirstTransport，前端不接触运行时协议。Pi 每轮启动受控进程并打开稳定的私有 Session 文件，结束/取消回收进程，宿主丢失后的在途轮次明确 interrupted；下一轮仍打开原会话。未知引擎、不可用运行时与不可用能力均明确失败，不跨引擎回退。Composer 引擎菜单保持可打开；草稿直接改选择，已绑定或正在恢复/执行的会话选择另一引擎时复用新建会话流程，成功后才更新草稿引擎并恢复未发送输入与附件；失败保留原绑定。
+
+Claude Code 引擎标识为 `claude_code`，复用 sidecar Run claim、冻结 Scope、事件持久化、审批邮箱和文档工作副本边界。Rust 定位并验证本机官方 CLI，以 `--bare --print --input-format stream-json --output-format stream-json --include-partial-messages` 启动；关闭内置工具、全局/项目配置及 skills，仅注入按 Run 创建、带随机 bearer 的 loopback MCP 工具服务。工具效果全部回到 Rust，沿用 Ask/AutoEdit/Plan 与命令沙箱。只给子进程注入当前供应商凭据；已配置的 DeepSeek 官方 HTTPS 端点（根路径或 `/v1`）可在 Claude Code 专用快照中转换为同域 `/anthropic`，保留供应商 ID、模型白名单与用户存储配置，第三方代理不猜测改写。Pi 使用原 OpenAI 配置。模型投影不枚举/读取 Keychain，避免未使用供应商的系统授权阻塞；前端模型与运行时状态独立发布，并有超时和重试；私有 HOME/CLAUDE_CONFIG_DIR 隔离原生会话，使用稳定 UUID 续接，不读取个人 Claude 登录。取消/结束撤销 MCP 服务并回收进程组，恢复孤儿 Run 时标记 interrupted，不连接 Hermes。Claude Code 独立版本检测，不要求安装 Pi；首版不再分发 CLI。
+
+
+Pi 包内资源按目标平台钉扎官方归档 SHA-256，应用资源完整性清单校验通过才启动；私有配置/Session 统一放在 StorageLayout 根的 pi/，禁止加载用户全局配置或工作区未授权扩展。Host 配置通过进程私有环境注入，模型和云端密钥不写 JSON 或日志。工具权限扩展按每轮冻结的本地工作目录与权限模式执行；notes/ 不授予原生工具写权，文档/选区采用临时工作副本并通过现有 DocumentService preview 生成审阅 Diff。Pi 不解析 Hermes 项目操作指令；macOS 命令须逐次批准并受 sandbox-exec 写入边界和 60 秒超时约束，Windows 首版不注册 bash。
+
+**后续阶段，当前 Pi 未接入云端记忆：** OpenViking 使用火山托管 endpoint（HTTPS，保留 /openviking base path），Host settings 保存共享非密钥连接投影与启用态，Keychain 使用 openviking-memory。Hermes 适配原生 memory.openviking，Pi 加载钉扎的 OpenViking 官方扩展；不能把配置保存冒充云端记忆已验证。同身份默认共享须在 UI 显示；跨引擎会话 ID 仍隔离。停用不删除远端记忆；Pi 下一轮读取配置，Hermes 已有会话需显式重启。现有 Hermes-only/Memory 所有权表述以此双引擎决策为准，Cron 仍归 Hermes，Native Lite/文档真相源不变。
+
+#### 17.5.2 OpenViking 原生记忆配置
+
+`Settings → OpenVikingSettingsPanel → Tauri agent_openviking_* → Rust agent/openviking → Hermes Dashboard`。读取 `/api/memory` 与 `/api/memory/providers/openviking/config` 后，只投影固定字段与状态；保存非密钥字段使用 `PUT /api/memory/providers/openviking/config`，停用使用 `PUT /api/memory/provider` 切回空 provider（内置）。保留 Runtime 已有召回参数，不安装插件依赖，不修改签名资源，不创建 SophoNote Memory 正文副本。
+
+API Key 使用独立 Host provider `openviking-memory`；保存不触发通用模型凭据热重启，在下次 Sidecar 启动以 `OPENVIKING_API_KEY` 注入。外置 Debug Gateway 无法获得受控注入，配置面明确拒绝管理；私有 Home 若存在旧环境/ovcli 覆盖，也应明确拒绝含糊保存。用户通过独立重启操作使已有会话切换配置，保存本身不停止 Run。Hermes 更新导致 Home 版本隔离时，以当前 Runtime 配置为准，不伪造跨版本配置迁移。
+
+连接测试只访问用户指定 endpoint 的 `/health` 和只读 `/api/v1/system/status`，先匿名确认 OpenViking 身份，再发送 `X-API-Key`，无 Key 时发送账户/用户头；Agent 头与原生插件一致。HTTP 客户端拒绝重定向、有超时与响应体上限；localhost 绕过系统代理。原生插件负责记忆同步/提取/召回，启用须确认会话外发及同身份共享。Host 不启动 OpenViking 服务；上游插件在本机已安装 `openviking-server` 时可能尝试自启，其生命周期不属于本功能交付，不将这种情况宣称为 Host 托管或通过资源门禁。
+
 ### 17.6 签名、公证与安装验证命令
 
 以下命令只适用于已配置 Apple 签名/公证的 Release Candidate。`scripts/release-macos.sh` 在生成逐文件 hash 前先签包内 Python/Mach-O，Tauri 再签外层 App/DMG，之后不再修改 App 内容；随后分别公证并 staple App/DMG，任何一步失败都终止：

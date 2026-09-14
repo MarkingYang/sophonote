@@ -21,6 +21,8 @@ import {
   Globe2, Monitor,
 } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
+import { AgentEngineControl } from './AgentEngineControl';
+import { useSidecarConfig } from './useSidecarConfig';
 import { ComputerUsePanel, COMPUTER_NOTE_SKILL } from './ComputerUsePanel';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { confirm as confirmDialog, open } from '@tauri-apps/plugin-dialog';
@@ -31,6 +33,7 @@ import {
   isPlaceholderThreadTitle,
   resolveProjectThreadId,
   useAgentStore,
+  type AgentEngine,
   type AgentMessage,
   type AgentThread,
   type RunContext,
@@ -41,6 +44,7 @@ import {
   type AgentEvent,
 } from '../../stores/agentStore';
 import * as tauri from '../../services/tauri';
+import { subscribeTauriListener } from '../../services/browserErrors';
 import {
   pickArtifactView,
   type ArtifactView,
@@ -300,6 +304,7 @@ export default function ProjectChatPanel({
   const [composerError, setComposerError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sessionSurface, setSessionSurface] = useState<HermesSessionSurface | null>(null);
+  const composerDraftRef = useRef('');
   const [composerPrefill, setComposerPrefill] = useState<{ nonce: number; text: string } | null>(null);
   const [computerPanelOpen, setComputerPanelOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
@@ -389,8 +394,7 @@ export default function ProjectChatPanel({
     setModelMenuOpen(false);
   }, [projectId, propThreadId]);
 
-  // Hermes Runtime 是模型目录与当前选择的唯一真相源。SophoNote 只保留一个
-  // Surface 级 UI 偏好；若条目已从 Runtime 清单移除则回退 Runtime 当前值。
+  // 三种引擎共用 Host 模型配置及同一选择偏好；Hermes 的目录仍由 Runtime 投影。
   const refreshHermesModels = useCallback(() => {
     let cancelled = false;
     setHermesModelError(null);
@@ -426,20 +430,11 @@ export default function ProjectChatPanel({
     if (peekHermesModelOptions()) return;
     return refreshHermesModels();
   }, [refreshHermesModels]);
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void tauri.listenHermesStatusChanged((status) => {
+  useEffect(() => subscribeTauriListener(
+    tauri.listenHermesStatusChanged((status) => {
       if (status === 'connected') refreshHermesModels();
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [refreshHermesModels]);
+    }),
+  ), [refreshHermesModels]);
 
   const rememberHermesModel = useCallback((provider: string, model: string) => {
     const row = hermesModels?.providers.find((item) => item.slug === provider);
@@ -477,6 +472,21 @@ export default function ProjectChatPanel({
         scopedProjectId,
         explicitThreadId ?? selectedThreadId
       );
+  const currentThread = threads.find((thread) => thread.id === currentThreadId);
+  const [draftEngine, setDraftEngine] = useState<AgentEngine>('hermes');
+  const engineLocked = currentThread?.latestRunId != null;
+  const engine = engineLocked ? currentThread?.engine ?? 'hermes' : draftEngine;
+  const isSidecar = engine !== 'hermes';
+  const engineLabel = engine === 'claude_code' ? 'Claude Code' : engine === 'pi' ? 'Pi' : 'Hermes';
+  const modelConfig = useAppStore((state) => state.settings.aiConfig);
+  const { models: sidecarModels, status: sidecarStatus, error: sidecarError,
+    selection: sidecarSelection, setSelection: setSidecarSelection, refresh: setSidecarRefresh,
+    modelsLoading: sidecarModelsLoading, runtimeLoading: sidecarRuntimeLoading,
+  } = useSidecarConfig(engine, modelConfig);
+  useEffect(() => { if (isSidecar) { setSurfaceTab('chat'); setActiveSkill(null); setComputerPanelOpen(false); setSessionSurface(null); } }, [isSidecar]);
+  const displayProvider = isSidecar ? sidecarSelection.provider : selectedHermesProvider;
+  const displayModel = isSidecar ? sidecarSelection.model : selectedHermesModel;
+  const displayModelError = isSidecar ? sidecarError : hermesModelError;
   const messages = useSurfaceAgentStore((state) =>
     currentThreadId ? state.messagesByThreadId[currentThreadId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES
   );
@@ -588,13 +598,13 @@ export default function ProjectChatPanel({
     : null;
 
   useEffect(() => {
-    if (!currentThreadId || runningRunId) return;
+    if (isSidecar || !currentThreadId || runningRunId) return;
     let cancelled = false;
     hermesSessionSurface(currentThreadId)
       .then((surface) => { if (!cancelled) setSessionSurface(surface); })
       .catch(() => { if (!cancelled) setSessionSurface(null); });
     return () => { cancelled = true; };
-  }, [currentThreadId, runningRunId]);
+  }, [currentThreadId, runningRunId, isSidecar]);
 
   useEffect(() => {
     if (!findOpen) return;
@@ -844,6 +854,7 @@ export default function ProjectChatPanel({
   // 用户明确把编辑器选区加入 Chat 时，默认启用 Markdown 写作 Skill。
   // Skill 正文仍由 Hermes Runtime 加载；SophoNote 只选择原生命令名。
   useEffect(() => {
+    if (isSidecar) return;
     if (!selectionSkillKey) {
       if (
         autoSelectionSkillKeyRef.current &&
@@ -863,7 +874,7 @@ export default function ProjectChatPanel({
       autoSelectionSkillKeyRef.current = selectionSkillKey;
       setActiveSkill(SOPHONOTE_MARKDOWN_WRITING_SKILL);
     }
-  }, [activeSkill, hermesSkills, selectionSkillKey]);
+  }, [activeSkill, hermesSkills, selectionSkillKey, isSidecar]);
 
   const pickSkill = useCallback((name: string | null) => {
     if (selectionSkillKey) {
@@ -977,14 +988,12 @@ export default function ProjectChatPanel({
 
   useEffect(() => {
     if (surfaceTab === 'browser' || !isTauri()) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
     const dropHitsPanel = (position: { x: number; y: number }) => {
       const root = chatPanelRef.current;
       if (!root) return false;
       return physicalPointInCssRect(position, root.getBoundingClientRect(), window.devicePixelRatio || 1);
     };
-    void getCurrentWebview().onDragDropEvent((event) => {
+    return subscribeTauriListener(getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === 'enter' || event.payload.type === 'over') {
         setDropActive(dropHitsPanel(event.payload.position));
         return;
@@ -999,14 +1008,7 @@ export default function ProjectChatPanel({
         nativeDropAtRef.current = Date.now();
         appendDroppedPaths(event.payload.paths);
       }
-    }).then((nextUnlisten) => {
-      if (disposed) nextUnlisten();
-      else unlisten = nextUnlisten;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    }));
   }, [appendDroppedPaths, surfaceTab]);
 
   const pasteImageFromClipboard = useCallback(async () => {
@@ -1045,8 +1047,10 @@ export default function ProjectChatPanel({
   // 发送消息
   const handleSend = async (text: string) => {
     if ((!text.trim() && attachments.length === 0) || conversationLocked) return false;
-    if (!selectedHermesProvider || !selectedHermesModel) {
-      setComposerError('当前没有已配置且可用的模型，请到「设置 → AI 模型」完成配置。');
+    if (isSidecar && (sidecarModelsLoading || sidecarRuntimeLoading)) return false;
+    if (isSidecar && !sidecarStatus?.available) { setComposerError(sidecarError ?? `${engineLabel} 运行时正在检查，请稍后重试`); return false; }
+    if (!displayProvider || !displayModel) {
+      setComposerError(sidecarError ?? (engine === 'claude_code' ? '未找到兼容模型，请在「设置 → AI 模型」配置官方 DeepSeek 或 Anthropic 协议供应商。' : '当前没有已配置的模型，请到「设置 → AI 模型」完成配置。'));
       return false;
     }
     // Skill 名只作为 Hermes 原生命令引用透传；发送后保留供多轮复用。
@@ -1067,7 +1071,7 @@ export default function ProjectChatPanel({
     }
     // selection 由 Rust 通过 Hermes 原生 file.attach 提交；SophoNote 不拼接提示词。
     const slashName = text.trim().match(/^\/([^\s]+)/)?.[1]?.toLocaleLowerCase() ?? null;
-    const hermesCommand = slashName && (
+    const hermesCommand = !isSidecar && slashName && (
       hermesCapabilitySnapshot?.commands.some((item) => item.name.replace(/^\//, '').toLocaleLowerCase() === slashName) ||
       hermesSkills.some((item) => item.name.toLocaleLowerCase() === slashName)
     ) ? text.trim() : null;
@@ -1087,16 +1091,18 @@ export default function ProjectChatPanel({
       text,
       projectId ?? undefined,
       selection ?? continuationContext,
-      hermesCommand ? null : activeSkill,
+      isSidecar || hermesCommand ? null : activeSkill,
       focusDocument,
       runAttachments,
-      selectedHermesModel,
-      selectedHermesProvider,
+      displayModel,
+      displayProvider,
       hermesCommand,
       includeProjectContext,
       workspaceRoot,
       effectivePermissionMode,
+      engine,
     );
+    if (!result) setComposerError(useAgentStore.getState().lastStartError ?? '消息未发送，请检查当前运行状态');
     if (result) {
       // 新 Thread 创建后切换到该 Thread
       setLocalDraftSession(false);
@@ -1125,7 +1131,7 @@ export default function ProjectChatPanel({
     await loadThreadHistory(threadId);
   };
 
-  const handleNewSession = async () => {
+  const handleNewSession = async (): Promise<boolean> => {
     if (hasProjectScope) {
       setLocalDraftSession(true);
       onDraftSessionChange?.(true);
@@ -1133,9 +1139,9 @@ export default function ProjectChatPanel({
       selectThread(null);
       setAttachments([]);
       setComposerError(null);
-      return;
+      return true;
     }
-    if (creatingThreadRef.current) return;
+    if (creatingThreadRef.current) return false;
     creatingThreadRef.current = true;
     const previousThreadId = currentThreadId;
     setCreatingThread(true);
@@ -1148,13 +1154,39 @@ export default function ProjectChatPanel({
       if (!id) {
         setActiveThreadId(previousThreadId);
         selectThread(previousThreadId);
-        return;
+        return false;
       }
       setActiveThreadId(id);
       historyRestoredRef.current = id;
+      return true;
     } finally {
       creatingThreadRef.current = false;
       setCreatingThread(false);
+    }
+  };
+
+  const selectEngine = async (nextEngine: AgentEngine): Promise<boolean> => {
+    if (nextEngine === engine) return true;
+    const draft = composerDraftRef.current;
+    const draftAttachments = attachments;
+    try {
+      if (engineLocked || conversationLocked) {
+        const created = await handleNewSession();
+        setAttachments(draftAttachments);
+        setComposerPrefill({ nonce: Date.now(), text: draft });
+        if (!created) {
+          setComposerError('新建会话失败，仍保留原引擎，请重试。');
+          return false;
+        }
+      }
+      setDraftEngine(nextEngine);
+      setComposerError(null);
+      setModelMenuOpen(false);
+      setAttachmentMenuOpen(false);
+      return true;
+    } catch (error) {
+      setComposerError(`切换引擎失败：${String(error)}`);
+      return false;
     }
   };
 
@@ -1213,6 +1245,7 @@ export default function ProjectChatPanel({
       return true;
     }
     const control = isSessionControlCommand(command);
+    if (isSidecar && control) { setComposerError('此命令仅适用于 Hermes 会话'); return true; }
     if (control === 'undo') {
       void runHermesUndo(command);
       return true;
@@ -1222,7 +1255,7 @@ export default function ProjectChatPanel({
       return true;
     }
     return false;
-  }, [cancelRun, handleNewSession, runningRunId, runHermesUndo, toggleSessionYolo]);
+  }, [cancelRun, handleNewSession, runningRunId, runHermesUndo, toggleSessionYolo, isSidecar]);
 
   const handleComposerReference = useCallback((reference: string): string => {
     if (reference === '@file:') { void pickLocalAttachments('file'); return ''; }
@@ -1274,7 +1307,7 @@ export default function ProjectChatPanel({
       ref={chatPanelRef}
       className={`w-full h-full bg-[var(--bg-surface)] flex flex-col relative ${layout === 'panel' ? 'border-l border-[var(--border-default)]' : ''}`}
     >
-      {showBrowserTab && <header className="h-9 shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-2 flex items-center gap-1">
+      {showBrowserTab && !isSidecar && <header className="h-9 shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-2 flex items-center gap-1">
         <button type="button" onClick={() => setSurfaceTab('chat')} className={`h-7 rounded-md px-2.5 inline-flex items-center gap-1.5 text-xs font-medium ${surfaceTab === 'chat' ? 'bg-[var(--accent-subtle)] text-[var(--accent)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]'}`}>
           <MessageSquareText size={12} /> AI 对话
         </button>
@@ -1283,7 +1316,7 @@ export default function ProjectChatPanel({
           <span className={`h-1.5 w-1.5 rounded-full ${browserConnected ? 'bg-[var(--success)]' : 'bg-[var(--border-strong)]'}`} />
         </button>
       </header>}
-      {showBrowserTab && surfaceTab === 'browser' ? (
+      {showBrowserTab && !isSidecar && surfaceTab === 'browser' ? (
         <AgentBrowserPanel
           onConnectionChange={setBrowserConnected}
           onAddToChat={(target) => {
@@ -1463,7 +1496,7 @@ export default function ProjectChatPanel({
             icon={MessageSquareText}
             title={emptyHint ?? (hasProjectScope
               ? '以当前本地项目为工作范围，用自然语言完成代码与文档任务。'
-              : '直接向 Hermes Agent 描述任务，过程与结果会保留在当前会话中。')}
+              : `直接向 ${engineLabel} Agent 描述任务，过程与结果会保留在当前会话中。`)}
           />
         ) : (
           <ChatTimeline
@@ -1505,7 +1538,7 @@ export default function ProjectChatPanel({
             hasNote={Boolean(activeDocumentId || selection)}
             skillAvailable={hermesSkills.some((skill) => skill.name === COMPUTER_NOTE_SKILL)}
             onRefresh={refreshSkills}
-            onNewSession={handleNewSession}
+            onNewSession={async () => { await handleNewSession(); }}
             onStop={async () => {
               if (runningRunId && !(await cancelRun(runningRunId))) throw new Error('未能确认运行已停止，请重试或查看会话状态。');
             }}
@@ -1532,6 +1565,7 @@ export default function ProjectChatPanel({
         <div className="relative">
           {attachmentMenuOpen && (
             <AttachmentPickerPopup
+              showSkills={!isSidecar}
               onPickFile={() => void pickLocalAttachments('file')}
               onPickFolder={() => void pickLocalAttachments('folder')}
               onPickImage={() => void pickLocalAttachments('image')}
@@ -1540,7 +1574,7 @@ export default function ProjectChatPanel({
                 setUrlEditorOpen(true);
                 setAttachmentMenuOpen(false);
               }}
-              skills={hermesSkills}
+              skills={isSidecar ? [] : hermesSkills}
               activeSkill={activeSkill}
               onPickSkill={pickSkill}
               onClose={() => setAttachmentMenuOpen(false)}
@@ -1555,13 +1589,22 @@ export default function ProjectChatPanel({
             />
           )}
           {modelMenuOpen && (
-            <HermesModelPicker
-              providers={hermesModels?.providers ?? []}
-              activeProvider={selectedHermesProvider}
-              activeModel={selectedHermesModel}
-              error={hermesModelError}
-              onPick={rememberHermesModel}
-              onRetry={() => { refreshHermesModels(); }}
+            <AgentModelPicker
+              providers={(isSidecar ? sidecarModels : hermesModels)?.providers ?? []}
+              activeProvider={displayProvider}
+              activeModel={displayModel}
+              error={displayModelError}
+              onPick={(provider, model) => {
+                if (isSidecar) {
+                  setSidecarSelection({ provider, model });
+                  setSelectedHermesProvider(provider); setSelectedHermesModel(model);
+                  window.localStorage.setItem('sophonote.hermes.provider', provider);
+                  window.localStorage.setItem('sophonote.hermes.model', model);
+                  setModelMenuOpen(false);
+                }
+                else rememberHermesModel(provider, model);
+              }}
+              onRetry={() => { if (isSidecar) setSidecarRefresh((n) => n + 1); else refreshHermesModels(); }}
               onClose={() => setModelMenuOpen(false)}
             />
           )}
@@ -1577,17 +1620,18 @@ export default function ProjectChatPanel({
                       ? '对选中内容下指令…'
                       : continuationContext
                         ? '继续调整当前修改…'
-                        : composerPlaceholder ?? (hasProjectScope ? '问项目…' : '向 Hermes Agent 下达任务…')
+                        : composerPlaceholder ?? (hasProjectScope ? '问项目…' : `向 ${engineLabel} Agent 下达任务…`)
             }
             onSend={handleSend}
-            commands={hermesCapabilitySnapshot?.commands ?? []}
-            skills={hermesSkills}
-            references={hermesCapabilitySnapshot?.references ?? []}
+            commands={isSidecar ? [] : hermesCapabilitySnapshot?.commands ?? []}
+            skills={isSidecar ? [] : hermesSkills}
+            references={isSidecar ? [] : hermesCapabilitySnapshot?.references ?? []}
             onPickSkill={pickSkill}
             onPickReference={handleComposerReference}
             onCommand={handleComposerCommand}
             prefill={composerPrefill}
             composerKey={currentThreadId ?? 'draft'}
+            liveDraftRef={composerDraftRef}
             canSubmit={attachments.length > 0}
             running={runningRunId != null}
             locked={conversationLocked}
@@ -1638,7 +1682,7 @@ export default function ProjectChatPanel({
                 onClear={() => setAttachments((items) => items.filter((item) => item.id !== attachment.id))}
               />
             ))}
-            error={composerError}
+            error={composerError ?? (isSidecar ? sidecarError : null)}
             onPasteImage={(file) => void appendPastedImage(file, file.name || '粘贴图片')}
             leftSlot={
               <>
@@ -1658,12 +1702,14 @@ export default function ProjectChatPanel({
                 >
                   <Plus size={14} />
                 </button>
+                <AgentEngineControl value={engine}
+                  disabled={creatingThread} onSelect={selectEngine} />
                 <ComposerPermissionControl
                   value={effectivePermissionMode}
                   onChange={changePermissionMode}
                   disabled={conversationLocked}
                 />
-                <button type="button" title="电脑操作" aria-label="电脑操作" onClick={() => { refreshSkills(); setComputerPanelOpen(true); }} className="inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]">
+                {!isSidecar && <><button type="button" title="电脑操作" aria-label="电脑操作" onClick={() => { refreshSkills(); setComputerPanelOpen(true); }} className="inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]">
                   <Monitor size={13} /><span>电脑</span>
                 </button>
                 <button
@@ -1683,7 +1729,7 @@ export default function ProjectChatPanel({
                 >
                   <Zap size={13} />
                   YOLO
-                </button>
+                </button></>}
               </>
             }
             rightSlot={
@@ -1704,11 +1750,11 @@ export default function ProjectChatPanel({
                 }}
                 disabled={conversationLocked}
                 className="h-7 max-w-[168px] inline-flex items-center gap-1 rounded-lg px-2 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text-secondary)] disabled:opacity-40"
-                title={selectedHermesProvider
-                  ? `${selectedHermesProvider} · ${selectedHermesModel}`
-                  : hermesModelError ?? '正在读取 Hermes Runtime 模型'}
+                title={displayProvider
+                  ? `${displayProvider} · ${displayModel}`
+                  : displayModelError ?? (isSidecar ? `正在读取 ${engineLabel} 模型` : '正在读取 Hermes Runtime 模型')}
               >
-                <span className="truncate">{selectedHermesModel || '未配置模型'}</span>
+                <span className="truncate">{displayModel || (isSidecar && sidecarModelsLoading ? '正在读取模型…' : '未配置模型')}</span>
                 <ChevronDown size={10} className="shrink-0" />
               </button>
               </>
@@ -2436,7 +2482,7 @@ function ComposerPermissionControl({
         type="button"
         onClick={() => setOpen((current) => !current)}
         disabled={disabled}
-        className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-xs font-medium transition-colors hover:bg-[var(--bg-sunken)] disabled:pointer-events-none disabled:opacity-40 ${tone}`}
+        className={`inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-xs font-medium transition-colors hover:bg-[var(--bg-sunken)] disabled:pointer-events-none disabled:opacity-40 ${tone}`}
         aria-haspopup="menu"
         aria-expanded={open}
         title="当前会话的权限模式"
@@ -2448,19 +2494,19 @@ function ComposerPermissionControl({
       {open && (
         <>
           <button type="button" className="fixed inset-0 z-30 cursor-default" aria-label="关闭权限菜单" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-[calc(100%+8px)] left-0 z-40 w-44 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] py-1.5 shadow-[var(--shadow-lg)]" role="menu">
+          <div className="absolute bottom-[calc(100%+8px)] left-0 z-40 w-max whitespace-nowrap overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-1 shadow-[var(--shadow-lg)]" role="menu">
             {options.map((option) => (
               <button
                 key={option.value}
                 type="button"
                 onClick={() => { onChange(option.value); setOpen(false); }}
-                className={`flex h-9 w-full items-center gap-2.5 px-3 text-left transition-colors hover:bg-[var(--bg-sunken)] ${value === option.value ? 'bg-[var(--accent-subtle)]' : ''}`}
+                className={`flex h-8 w-full items-center gap-1.5 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--bg-sunken)] ${value === option.value ? 'bg-[var(--accent-subtle)]' : ''}`}
                 role="menuitemradio"
                 aria-checked={value === option.value}
               >
                 <ShieldAlert size={14} className={`shrink-0 ${option.value === 'ask' ? 'text-[var(--warning)]' : option.value === 'autoEdit' ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'}`} />
-                <span className="min-w-0 flex-1 text-xs font-medium text-[var(--text-secondary)]">{option.label}</span>
-                {value === option.value && <Check size={12} className="shrink-0 text-[var(--accent)]" />}
+                <span className="text-xs font-medium text-[var(--text-secondary)]">{option.label}</span>
+                <Check size={12} aria-hidden="true" className={`shrink-0 text-[var(--accent)] ${value === option.value ? '' : 'invisible'}`} />
               </button>
             ))}
           </div>
@@ -2850,6 +2896,7 @@ function ComposerAttachmentChip({
 }
 
 function AttachmentPickerPopup({
+  showSkills,
   onPickFile,
   onPickFolder,
   onPickImage,
@@ -2860,6 +2907,7 @@ function AttachmentPickerPopup({
   onPickSkill,
   onClose,
 }: {
+  showSkills: boolean;
   onPickFile: () => void;
   onPickFolder: () => void;
   onPickImage: () => void;
@@ -2896,7 +2944,7 @@ function AttachmentPickerPopup({
                 <span>{label}</span>
               </button>
             ))}
-            <div className="mx-2 my-1 border-t border-[var(--border-default)]" />
+            {showSkills && <><div className="mx-2 my-1 border-t border-[var(--border-default)]" />
             <button
               type="button"
               onClick={() => setView('skills')}
@@ -2907,6 +2955,7 @@ function AttachmentPickerPopup({
               <span className="ml-auto max-w-32 truncate text-[var(--text-tertiary)]">{activeSkill ?? `${skills.length} 个可用`}</span>
               <ChevronRight size={12} className="text-[var(--text-tertiary)]" />
             </button>
+            </>}
             <div className="mx-2 mt-1 border-t border-[var(--border-default)] px-1 pt-2 text-xs leading-relaxed text-[var(--text-tertiary)]">
               也可以在输入框直接按 ⌘V 粘贴图片
             </div>
@@ -2991,7 +3040,7 @@ function UrlAttachmentEditor({
   );
 }
 
-function HermesModelPicker({
+function AgentModelPicker({
   providers,
   activeProvider,
   activeModel,
@@ -3009,7 +3058,7 @@ function HermesModelPicker({
   onClose: () => void;
 }) {
   const available = providers.filter(
-    (provider) => provider.authenticated === true && provider.models.length > 0
+    (provider) => provider.authenticated !== false && provider.models.length > 0
   );
   return (
     <>
@@ -3017,7 +3066,7 @@ function HermesModelPicker({
       <div className="absolute bottom-[calc(100%+8px)] right-0 z-40 max-h-64 w-64 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] py-1.5 shadow-[var(--shadow-lg)]">
         <div className="border-b border-[var(--border-default)] px-3 pb-2 pt-1">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-tertiary)]">本轮模型</p>
-          <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">来自 Hermes Runtime</p>
+          <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">来自 AI 模型设置</p>
         </div>
         {available.map((provider) => (
           <div key={provider.slug} className="border-b border-[var(--border-default)] last:border-b-0">
@@ -3039,10 +3088,10 @@ function HermesModelPicker({
             ))}
           </div>
         ))}
-        {available.length === 0 && (
+        {(available.length === 0 || error) && (
           <div className="px-3 py-3 text-xs leading-relaxed text-[var(--text-tertiary)]">
             <p className={error ? 'text-[var(--danger)]' : undefined}>
-              {error ?? 'Hermes Runtime 没有已认证的可选模型，请先运行 `hermes model` 完成配置。'}
+              {error ?? '没有可用模型，请到「设置 → AI 模型」完成供应商配置。'}
             </p>
             <button type="button" onClick={onRetry} className="mt-2 rounded-md border border-[var(--border-default)] px-2 py-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]">重新读取</button>
           </div>
@@ -3142,6 +3191,7 @@ function ChatComposer({
   rightSlot,
   prefill = null,
   composerKey = 'draft',
+  liveDraftRef,
 }: {
   placeholder: string;
   onSend: (text: string) => Promise<boolean>;
@@ -3170,8 +3220,10 @@ function ChatComposer({
   rightSlot?: ReactNode;
   prefill?: { nonce: number; text: string } | null;
   composerKey?: string;
+  liveDraftRef?: { current: string };
 }) {
   const [text, setText] = useState('');
+  useEffect(() => { if (liveDraftRef) liveDraftRef.current = text; }, [text, liveDraftRef]);
   const [sending, setSending] = useState(false);
   const [caret, setCaret] = useState(0);
   const [activeItem, setActiveItem] = useState(0);

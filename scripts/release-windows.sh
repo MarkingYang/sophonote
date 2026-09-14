@@ -23,6 +23,7 @@ is_windows_host || {
 export HERMES_TARGET=x86_64-pc-windows-msvc
 cd "$ROOT"
 pnpm hermes:bundle
+pnpm pi:bundle
 pnpm tauri build --bundles nsis --config src-tauri/tauri.release.windows.conf.json
 
 NSIS=$(find "$ROOT/src-tauri/target/release/bundle/nsis" -maxdepth 1 \( -name '*setup.exe' -o -name '*.exe' \) -print 2>/dev/null | head -1 || true)

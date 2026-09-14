@@ -46,6 +46,7 @@ then
   exit 2
 fi
 
+pnpm pi:bundle
 pnpm tauri build --bundles app
 
 APP="$ROOT/src-tauri/target/release/bundle.noindex/macos/SophoNote.app"
@@ -55,7 +56,8 @@ test -d "$APP" || { echo "SophoNote.app missing after pack: $APP" >&2; exit 2; }
 # before its first hdiutil call under Bash `set -e`. Build the unsigned
 # preview image with the same deterministic hdiutil path used by the signed
 # release pipeline instead of leaving a mounted rw.* image behind.
-codesign --force --deep --sign - --timestamp=none "$APP"
+# Nested sidecars are already signed before their integrity manifests are generated.
+codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 VERSION=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)".*/\1/p' "$ROOT/src-tauri/tauri.conf.json" | head -1)

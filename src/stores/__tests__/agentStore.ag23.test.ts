@@ -244,6 +244,7 @@ describe('AG-23 startRun/cancelRun 生命周期', () => {
         includeProjectContext: false,
         workspaceRoot: null,
         workspacePermissionMode: 'ask',
+        engine: null,
       },
       onEvent: expect.anything(),
     });

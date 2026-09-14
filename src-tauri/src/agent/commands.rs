@@ -79,8 +79,11 @@ fn hermes_session_for_thread(
     thread_id: &str,
 ) -> Result<Option<String>, String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
-    crate::agent::store::RunStore::new(conn)
-        .external_session_id_for_thread(thread_id)
+    let store = crate::agent::store::RunStore::new(conn);
+    if store.get_thread(thread_id).map_err(|e| e.to_string())?.is_some_and(|t| t.engine != "hermes") {
+        return Err("此会话使用其他引擎，不能调用 Hermes Session".into());
+    }
+    store.external_session_id_for_thread(thread_id)
         .map_err(|e| format!("读取 Hermes Session 映射失败: {e}"))
 }
 
@@ -149,8 +152,8 @@ pub struct SpikeRunArgs {
 
 /// AG-07：Tauri Channel 的 EventTransport 包装——事件经 invoke 时传入的
 /// on_event 通道实时送达前端（Channel::send 本身同步、内部排队，无需 await）
-struct ChannelTransport {
-    channel: tauri::ipc::Channel<AgentEvent>,
+pub(crate) struct ChannelTransport {
+    pub(crate) channel: tauri::ipc::Channel<AgentEvent>,
 }
 
 impl EventTransport for ChannelTransport {
@@ -443,7 +446,11 @@ pub async fn agent_thread_close(app: AppHandle, thread_id: String) -> ApiRespons
                 .any(|message| message.role == "user" && !message.content.trim().is_empty()),
             Err(e) => return ApiResponse::err(e.to_string()),
         };
-        if has_user_message {
+        let is_sidecar = match store.get_thread(&thread_id) {
+            Ok(thread) => thread.is_some_and(|t| matches!(t.engine.as_str(), "pi" | "claude_code")),
+            Err(e) => return ApiResponse::err(e.to_string()),
+        };
+        if has_user_message || is_sidecar {
             None
         } else {
             match store.external_session_id_for_thread(&thread_id) {
@@ -728,6 +735,16 @@ pub async fn agent_run_reconcile(
         ) {
             return ApiResponse::ok(snapshot);
         }
+        if store.get_run(&run_id).ok().flatten().is_some_and(|run| matches!(run.engine.as_str(), "pi" | "claude_code")) {
+            if let Err(error) = store.interrupt_orphaned_run(&run_id,
+                "智能体宿主执行已结束；本轮已中断，可在同一会话继续", super::pi::now_ms()) {
+                return ApiResponse::err(error.to_string());
+            }
+            return match store.state_snapshot(&run_id) {
+                Ok(Some(snapshot)) => ApiResponse::ok(snapshot),
+                _ => ApiResponse::err("无法读取智能体恢复状态".into()),
+            };
+        }
         let stored_session_id = match store.external_session_id_for_thread(&snapshot.thread_id) {
             Ok(Some(session_id)) => session_id,
             Ok(None) => {
@@ -928,6 +945,9 @@ pub async fn agent_run_delete(app: AppHandle, run_id: String) -> ApiResponse<()>
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunStartArgs {
+    /// 首次运行可选引擎；已有会话固定绑定。
+    #[serde(default)]
+    pub engine: Option<String>,
     /// 用户输入
     pub message: String,
     /// Thread ID（None = 自动创建新 Thread）
@@ -3434,6 +3454,9 @@ pub async fn agent_hermes_session_surface(
     thread_id: String,
 ) -> ApiResponse<crate::agent::hermes::session_surface::HermesSessionSurface> {
     let db_path = crate::db::get_db_path(&app);
+    if let Err(error) = hermes_session_for_thread(&db_path, &thread_id) {
+        return ApiResponse::err(error);
+    }
     match crate::agent::hermes::session_surface::load_session_surface(&db_path, &thread_id).await {
         Ok(surface) => ApiResponse::ok(surface),
         Err(error) => ApiResponse::err(error),
@@ -3448,6 +3471,9 @@ pub async fn agent_hermes_session_set_yolo(
     enabled: bool,
 ) -> ApiResponse<bool> {
     let db_path = crate::db::get_db_path(&app);
+    if let Err(error) = hermes_session_for_thread(&db_path, &thread_id) {
+        return ApiResponse::err(error);
+    }
     match crate::agent::hermes::session_surface::set_session_yolo(&db_path, &thread_id, enabled)
         .await
     {
@@ -3464,6 +3490,9 @@ pub async fn agent_hermes_session_slash(
     command: String,
 ) -> ApiResponse<crate::agent::hermes::session_surface::HermesSlashSurfaceResult> {
     let db_path = crate::db::get_db_path(&app);
+    if let Err(error) = hermes_session_for_thread(&db_path, &thread_id) {
+        return ApiResponse::err(error);
+    }
     match crate::agent::hermes::session_surface::exec_session_slash(&db_path, &thread_id, &command)
         .await
     {
@@ -4375,6 +4404,16 @@ pub async fn agent_run_start(
     request: AgentRunStartArgs,
     on_event: tauri::ipc::Channel<AgentEvent>,
 ) -> ApiResponse<AgentRunStartResult> {
+    let engine = match super::pi::resolve_request_engine(&app, &request) {
+        Ok(engine) => engine,
+        Err(error) => return ApiResponse::err(error),
+    };
+    if engine == "claude_code" {
+        return super::pi::start_engine(app, request, on_event, "claude_code").await;
+    }
+    if engine == "pi" {
+        return super::pi::start(app, request, on_event).await;
+    }
     let db_path = crate::db::get_db_path(&app);
 
     let workspace_permission_mode = request
@@ -4531,21 +4570,13 @@ pub async fn agent_run_start(
     let max_turns = request.max_turns.unwrap_or(6).clamp(1, 20);
 
     // provider/model 直接记录 Hermes Runtime 的真实选择。
-    if let Err(e) = store.create_run(
-        &run_id,
-        &thread_id,
-        effective_project.as_deref(),
-        &selected_hermes_provider,
-        &selected_hermes_model,
-        Some(prompt_version.as_str()),
-        max_turns,
-        now_ms,
-    ) {
-        return ApiResponse::err(format!("创建 Run 失败: {}", e));
-    }
-    // H8：覆盖默认 rig 引擎字段为本次选型结果
-    if let Err(e) = store.set_run_engine(&run_id, selected_engine_id, selected_engine_version) {
-        eprintln!("[agent] 写入 run.engine 失败（不阻断）: {e}");
+    if let Err(e) = store.with_run_claim(&thread_id, "hermes", || {
+        store.create_run(&run_id, &thread_id, effective_project.as_deref(),
+            &selected_hermes_provider, &selected_hermes_model, Some(prompt_version.as_str()), max_turns, now_ms)?;
+        store.set_run_engine(&run_id, selected_engine_id, selected_engine_version)?;
+        store.set_latest_run_id(&thread_id, &run_id, now_ms)
+    }) {
+        return ApiResponse::err(format!("创建 Run 失败: {e}"));
     }
     if let Some(session_id) = hermes_session_id.as_deref() {
         if let Err(e) = store.update_run_external_meta(
@@ -4978,7 +5009,7 @@ impl CancelRegistry {
 
 /// 进程级单例注册表。OnceLock::get_or_init（1.70 稳定）；
 /// 不用 get_or_try_init 等更新 API（宿主 rustc 版本约束）。
-fn global_cancel_registry() -> &'static CancelRegistry {
+pub(crate) fn global_cancel_registry() -> &'static CancelRegistry {
     static REGISTRY: OnceLock<CancelRegistry> = OnceLock::new();
     REGISTRY.get_or_init(CancelRegistry::default)
 }
@@ -5064,7 +5095,7 @@ mod scope_tests {
 
     fn thread(id: &str, project: Option<&str>) -> AgentThread {
         AgentThread {
-            id: id.into(),
+            engine: "hermes".into(),            id: id.into(),
             title: "t".into(),
             status: ThreadStatus::Completed,
             project_id: project.map(str::to_string),

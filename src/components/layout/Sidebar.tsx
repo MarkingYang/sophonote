@@ -13,6 +13,7 @@ import { useAppStore } from '../../stores/appStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState } from 'react';
 import { preloadPage } from '../../services/pagePreload';
+import { safeUnlisten } from '../../services/browserErrors';
 
 export const navItems = [
   { id: 'discover', label: '发现', icon: Compass },
@@ -58,7 +59,7 @@ export default function Sidebar({ onToggleCollapse, width = 224 }: SidebarProps)
     const unlisten = win.onResized(sync);
     return () => {
       alive = false;
-      unlisten.then((off) => off()).catch(() => {});
+      unlisten.then((off) => safeUnlisten(off)).catch(() => {});
     };
   }, []);
 

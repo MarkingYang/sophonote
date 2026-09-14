@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "sh scripts/tauri.sh",
+    "pi:bundle": "python3 scripts/build-pi-sidecar.py",
     "hermes:bundle": "sh scripts/build-hermes-sidecar.sh",
     "pack:macos": "sh scripts/pack-macos.sh",
     "pack:windows": "sh scripts/pack-windows.sh",

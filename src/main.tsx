@@ -9,7 +9,10 @@ import '@milkdown/crepe/theme/classic.css';
 import 'katex/dist/katex.min.css';
 import 'highlight.js/styles/github-dark.css';
 import App from './App';
-import { isDeferredResizeObserverNotification } from './services/browserErrors';
+import {
+  isBenignTauriUnlistenRejection,
+  isDeferredResizeObserverNotification,
+} from './services/browserErrors';
 
 // 全局致命错误浮层：白屏时把真实错误显示出来，而不是无声失败
 function showFatalError(message: string) {
@@ -36,6 +39,10 @@ window.addEventListener('error', (e) => {
 });
 window.addEventListener('unhandledrejection', (e) => {
   const reason = e.reason;
+  if (isBenignTauriUnlistenRejection(reason)) {
+    e.preventDefault();
+    return;
+  }
   showFatalError(`Unhandled Promise rejection:\n${reason?.stack || reason?.message || String(reason)}`);
 });
 

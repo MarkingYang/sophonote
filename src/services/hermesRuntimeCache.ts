@@ -25,10 +25,11 @@ export function rememberHermesCapabilities(next: HermesCapabilities | null): voi
 
 export function resolveStoredHermesSelection(
   options: HermesModelOptions | null,
+  allowUnchecked = false,
 ): { provider: string; model: string } {
   if (!options) return { provider: '', model: '' };
   const configured = options.providers.filter(
-    (provider) => provider.authenticated === true && provider.models.length > 0,
+    (provider) => (provider.authenticated === true || (allowUnchecked && provider.authenticated == null)) && provider.models.length > 0,
   );
   const storedProvider = typeof window !== 'undefined'
     ? window.localStorage.getItem('sophonote.hermes.provider') ?? ''

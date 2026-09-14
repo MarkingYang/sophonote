@@ -89,20 +89,27 @@ enum ProjectDocumentAction {
 }
 
 #[derive(Clone)]
-enum WorkingCopyTarget {
+pub(crate) enum WorkingCopyTarget {
     Document(HermesFocusDocument),
     Selection(crate::agent::events::RunContext),
     Project,
 }
 
 #[derive(Clone)]
-struct HostPatchContext {
+pub(crate) struct HostPatchContext {
     staged_path: std::path::PathBuf,
     target: WorkingCopyTarget,
     binding: HermesSessionBinding,
+    engine: &'static str,
 }
 
-fn host_patch_context_for_attachment(
+impl HostPatchContext {
+    #[cfg(test)]
+    pub(crate) fn for_pi(self) -> Self { self.for_sidecar("pi") }
+    pub(crate) fn for_sidecar(mut self, engine: &'static str) -> Self { self.engine = engine; self }
+}
+
+pub(crate) fn host_patch_context_for_attachment(
     binding: Option<&HermesSessionBinding>,
     staged_path: std::path::PathBuf,
     target: WorkingCopyTarget,
@@ -115,6 +122,7 @@ fn host_patch_context_for_attachment(
         staged_path,
         target,
         binding: binding.clone(),
+        engine: "hermes",
     })
 }
 
@@ -969,7 +977,7 @@ fn native_file_attachment(
     })
 }
 
-fn selection_attachment_markdown(selection: &crate::agent::events::RunContext) -> String {
+pub(crate) fn selection_attachment_markdown(selection: &crate::agent::events::RunContext) -> String {
     let title = serde_json::to_string(&selection.title).unwrap_or_else(|_| "\"\"".into());
     let article_id = serde_json::to_string(&selection.article_id).unwrap_or_else(|_| "\"\"".into());
     let hash =
@@ -980,7 +988,7 @@ fn selection_attachment_markdown(selection: &crate::agent::events::RunContext) -
     )
 }
 
-fn focus_document_attachment_markdown(
+pub(crate) fn focus_document_attachment_markdown(
     document: &HermesFocusDocument,
     project_id: Option<&str>,
 ) -> String {
@@ -1036,12 +1044,12 @@ fn editable_markdown(value: &str) -> Result<&str, String> {
     Ok(body)
 }
 
-fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
+pub(crate) fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
     let Some(emitter) = emitter else {
         return;
     };
     let staged_result = std::fs::read_to_string(&context.staged_path)
-        .map_err(|error| format!("无法回读 Hermes 工作副本：{error}"));
+        .map_err(|error| format!("无法回读智能体工作副本：{error}"));
     if matches!(context.target, WorkingCopyTarget::Project) {
         match staged_result {
             Ok(staged) => emit_host_project_actions(context, &staged, emitter),
@@ -1099,7 +1107,7 @@ fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
         }
         let conn = rusqlite::Connection::open(&context.binding.db_path)
             .map_err(|error| format!("打开文档数据库失败：{error}"))?;
-        let idempotency_key = format!("hermes-workcopy:{}:{}", context.binding.run_id, document_id);
+        let idempotency_key = format!("{}-workcopy:{}:{}", context.engine, context.binding.run_id, document_id);
         // NEXT-042：正文有差异时，标题提案并入同一 Patch 审批（随整块批准落盘）。
         let proposed_title = match (&context.target, &host_title) {
             (WorkingCopyTarget::Document(_), HostTitleDecision::Proposed(title)) => {
@@ -1157,7 +1165,7 @@ fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
                 arguments_json: serde_json::json!({
                     "documentId": document_id,
                     "baseVersion": base_version,
-                    "source": "hermes-session-working-copy"
+                    "source": format!("{}-session-working-copy", context.engine)
                 })
                 .to_string(),
             });
@@ -1170,13 +1178,13 @@ fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
                 structured.clone(),
                 match &preview.proposed_title {
                     Some(new_title) => format!(
-                        "已把 Hermes 对《{}》的修改送到左侧原文，共 {} 个可审阅变更块；全部批准时标题将改为《{}》。",
+                        "已把智能体对《{}》的修改送到左侧原文，共 {} 个可审阅变更块；全部批准时标题将改为《{}》。",
                         preview.title,
                         preview.hunks.len(),
                         new_title
                     ),
                     None => format!(
-                        "已把 Hermes 对《{}》的修改送到左侧原文，共 {} 个可审阅变更块。",
+                        "已把智能体对《{}》的修改送到左侧原文，共 {} 个可审阅变更块。",
                         preview.title,
                         preview.hunks.len()
                     ),
@@ -1205,7 +1213,7 @@ fn emit_host_patch(context: &HostPatchContext, emitter: Option<&EventEmitter>) {
                 arguments_json: serde_json::json!({
                     "documentId": document_id,
                     "baseVersion": base_version,
-                    "source": "hermes-session-working-copy"
+                    "source": format!("{}-session-working-copy", context.engine)
                 })
                 .to_string(),
             });
@@ -1248,6 +1256,7 @@ fn project_document_actions(value: &str) -> Result<Vec<ProjectDocumentAction>, S
 }
 
 fn emit_host_project_actions(context: &HostPatchContext, staged: &str, emitter: &EventEmitter) {
+    if context.engine != "hermes" { return; }
     let Some(project_id) = context.binding.project_id.as_deref() else {
         return;
     };
@@ -1879,7 +1888,19 @@ mod recovery_tests {
 
     #[test]
     fn natural_language_workcopy_change_becomes_a_reviewable_diff() {
-        let fixture = crate::documents::repository::tests::RepoFixture::setup("host-writeback");
+        assert_workcopy_diff(false);
+    }
+
+    #[test]
+    fn pi_workcopy_proposes_diff_without_applying_project_actions() {
+        assert_workcopy_diff(true);
+    }
+
+    fn assert_workcopy_diff(pi: bool) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("host-writeback-{}", uuid::Uuid::new_v4()));
+        let fixture = crate::documents::repository::tests::RepoFixture { db_path:dir.join("sophonote.db"), notes:dir.join("notes"),dir };
+        std::fs::create_dir_all(&fixture.notes).unwrap();
+        crate::db::create_schema(&fixture.conn()).unwrap();
         fixture.seed_article("article-1", "未命名文档", "");
         fixture
             .conn()
@@ -1915,6 +1936,15 @@ mod recovery_tests {
             WorkingCopyTarget::Document(document),
         )
         .unwrap();
+        let context = if pi {
+            let mut context = context.for_pi();
+            context.binding.project_id = Some("forged-project".into());
+            let mut staged = std::fs::read_to_string(&context.staged_path).unwrap();
+            staged.push_str(&format!("\n{PROJECT_ACTIONS_START}\n[{{\"type\":\"create_document\",\"client_id\":\"forged\",\"title\":\"forged\"}}]\n{PROJECT_ACTIONS_END}"));
+            std::fs::write(&context.staged_path, staged).unwrap();
+            context
+        } else { context };
+        let original = std::fs::read_to_string(fixture.notes.join("article-1.md")).unwrap();
         let transport = Arc::new(RecordingTransport::default());
         let emitter = EventEmitter::new("thread-1", "run-1", transport.clone());
 
@@ -1940,6 +1970,8 @@ mod recovery_tests {
                 .map(|event| &event.payload)
                 .collect::<Vec<_>>()
         );
+        assert!(!events.iter().any(|event| matches!(&event.payload, AgentEventPayload::ToolStarted { name, .. } if name == "sophonote_project_tree")));
+        assert_eq!(std::fs::read_to_string(fixture.notes.join("article-1.md")).unwrap(), original);
         drop(events);
         let conn = fixture.conn();
         let pending: i64 = conn

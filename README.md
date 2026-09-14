@@ -4,9 +4,9 @@
 
 Official website: [sophonote.com](https://sophonote.com) · [GitHub Releases](https://github.com/MarkingYang/sophonote/releases)
 
-SophoNote is a local-first AI knowledge workbench for macOS, built around open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent). Notes, discovery, permissions, and document review stay in SophoNote; Hermes remains the agent runtime. This project is neither a Hermes Desktop fork nor a UI clone.
+SophoNote is a local-first AI knowledge workbench for macOS, using open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) and [Pi](https://github.com/earendil-works/pi) as selectable execution engines, with optional locally installed Claude Code. Notes, discovery, permissions, and document review stay in SophoNote. This project is neither a Hermes Desktop fork nor a UI clone.
 
-SophoNote is a **client surface** around a pinned Hermes sidecar:
+SophoNote is a **client surface** around pinned agent sidecars:
 
 - Hermes owns execution, model calls, Skills, MCP connections, and long-term memory.
 - SophoNote owns notes, discovery, permissions, approvals, files, and audit.
@@ -27,7 +27,7 @@ Primary navigation: Discover, Conversation, Studio, Notes, Scheduled Tasks, Tool
 | Surface | Role |
 |---|---|
 | Discover | Filtered and interpreted AI news, daily reports, and model rankings |
-| Conversation | Task-scoped Hermes sessions; optional temporary local-directory binding |
+| Conversation | Task-scoped Hermes, Pi, or Claude Code sessions; optional temporary local-directory binding |
 | Studio | IDE surface for a real local project: files, search, diffs, terminal, browser, and a right-side Agent |
 | Notes | Edit Markdown; opening Notes never creates a document—creation requires an explicit New Note, template, or Import Examples action |
 | Scheduled Tasks | Manage locally preserved Hermes cron jobs and run history; sanitized examples and jobs without an explicit model stay paused |
@@ -71,6 +71,13 @@ pnpm install
 Start and stop only through `scripts/sophonote.sh`. Do not leave `pnpm tauri dev` running in the foreground. Frontend-only changes rely on Vite HMR. Restart with `./scripts/sophonote.sh restart` after Rust or Tauri contract changes.
 
 Hermes ships as a pinned sidecar (Hermes 0.20.0 + CPython 3.11). Release builds start only the bundled runtime. Binaries are not in git. How to build the sidecar, attach an external Gateway, pack, and notarize is in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+
+New conversations can also select **Pi** below the composer; the engine is fixed after the first Run. Pi 0.85.1 ships as a standalone executable and reuses OpenAI-compatible / Anthropic providers from AI model settings. For source development, run `pnpm pi:bundle` first (Python 3.12+; the initial download requires network access). Pi supports streaming, persistent sessions, cancellation, file approvals, and document diffs; shell commands require approval on macOS. This first integration does not expose Hermes browser, computer control, Skill/MCP management, or OpenViking memory through Pi.
+
+**Claude Code** is also selectable in the same menu. Install the official [Claude Code CLI](https://code.claude.com/docs/en/setup) 2.1.233 or newer locally; SophoNote detects standard install locations (or the absolute `SOPHONOTE_CLAUDE_BIN` host environment override). It reuses Anthropic-protocol providers and official DeepSeek configurations from the shared AI model settings (DeepSeek is adapted to its official Anthropic endpoint without another API key), runs with isolated history and host-controlled tools, and does not use personal subscription login or global plugins. The CLI is not redistributed. Switching an existing session to another engine creates a new session and preserves unsent text and attachments.
+
+Agent updates are grouped under **Settings → Agent configuration updates**. Hermes prepares a private version for the next application restart. Pi verifies an official stable archive and its host extension before activating a private slot for subsequent runs. Claude Code uses the recognized native/npm updater or original Homebrew cask; custom installations show manual instructions. Runtime updates keep model settings and conversation history intact.
 
 ## Contributing and security
 

@@ -30,6 +30,7 @@ rustc --version
 
 ```bash
 pnpm install
+pnpm pi:bundle
 ./scripts/sophonote.sh start
 pnpm exec tsc --noEmit
 pnpm test --run
@@ -53,6 +54,9 @@ cargo test --all-targets
 ```
 
 Hermes 真链路成功时，`logs/dev.log` 应出现 `resolve=Use(Hermes)` 和 `surface=gateway`。验收必须覆盖 Session 创建/恢复、Skill、附件、审批/澄清、取消和最终答案，不能只测端口可连接。
+
+
+Pi 的独立可执行分发使用 `pnpm pi:bundle` 下载官方 0.85.1 包（构建工具要求 Python 3.12+），无需安装全局 Pi 或 Node 运行时。首次启动开发宿主前构建一次；修改 `scripts/assets/pi-policy.ts` 后重新构建。归档缓存位于 `src-tauri/target/pi-downloads/`，可分发资源位于 `src-tauri/resources/pi/<target>/`；pack/release 脚本自动构建。Pi 原生 RPC 回归使用本地模型夹具：`cd src-tauri && cargo test --lib agent::pi:: -- --include-ignored`，不连接真实供应商。Windows x64 首版不启用命令工具；macOS / Windows 安装包仍需各自宿主验收。
 
 ## 官网
 
