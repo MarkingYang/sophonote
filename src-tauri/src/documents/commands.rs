@@ -146,3 +146,127 @@ pub fn document_project_patches(
         Err(e) => ApiResponse::err(e.to_string()),
     }
 }
+
+/// 用户明确保存某条已完成回答；从持久化消息读取，保持全文，不重新调用模型。
+#[tauri::command]
+pub fn document_preview_chat_answer(
+    app: AppHandle,
+    document_id: String,
+    base_version: i64,
+    expected_markdown: String,
+    run_id: String,
+) -> ApiResponse<PatchPreview> {
+    let result = (|| {
+        let conn = Connection::open(crate::db::get_db_path(&app)).map_err(|e| e.to_string())?;
+        preview_chat_answer(
+            &conn,
+            &notes::notes_dir(&app),
+            &document_id,
+            base_version,
+            &expected_markdown,
+            &run_id,
+        )
+    })();
+    match result {
+        Ok(preview) => ApiResponse::ok(preview),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+
+fn preview_chat_answer(
+    conn: &Connection,
+    notes_dir: &std::path::Path,
+    document_id: &str,
+    base_version: i64,
+    expected: &str,
+    run_id: &str,
+) -> Result<PatchPreview, String> {
+    let answer: String = conn.query_row(
+        "SELECT m.content FROM agent_messages m JOIN agent_runs r ON r.id=m.run_id WHERE m.run_id=?1 AND m.role='assistant' AND r.status IN ('completed', '\"completed\"') ORDER BY m.created_at DESC LIMIT 1",
+        [run_id], |row| row.get(0),
+    ).map_err(|_| "这条回答尚未完整保存，请等待完成或重新打开会话")?;
+    if answer.trim().is_empty() || answer.len() > 1024 * 1024 || expected.len() > 1024 * 1024 {
+        return Err("回答为空或内容超过 1 MiB，无法提交笔记审阅".into());
+    }
+    let body = if expected.is_empty() {
+        answer
+    } else {
+        format!("{expected}\n\n{answer}")
+    };
+    service::preview_host_document_patch(
+        conn,
+        notes_dir,
+        document_id,
+        base_version,
+        expected,
+        &body,
+        Some(&format!(
+            "chat-answer:{run_id}:{document_id}:{base_version}"
+        )),
+        Some(run_id),
+        None,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod chat_answer_tests {
+    use super::*;
+    #[test]
+    fn saved_answer_becomes_reviewable_note_without_model_or_overwrite() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("chat-answer-{}", uuid::Uuid::new_v4()));
+        let fixture = crate::documents::repository::tests::RepoFixture {
+            db_path: dir.join("sophonote.db"),
+            notes: dir.join("notes"),
+            dir,
+        };
+        std::fs::create_dir_all(&fixture.notes).unwrap();
+        let conn = fixture.conn();
+        crate::db::create_schema(&conn).unwrap();
+        fixture.seed_article("blank", "空白", "");
+        fixture.seed_article("existing", "已有", "保留原文");
+        conn.execute("INSERT INTO agent_threads(id,title,status,created_at,updated_at) VALUES ('t','t','completed',1,1)",[]).unwrap();
+        conn.execute("INSERT INTO agent_runs(id,thread_id,status,created_at,updated_at) VALUES ('r','t','\"completed\"',1,1)",[]).unwrap();
+        conn.execute("INSERT INTO agent_messages(id,thread_id,run_id,role,content,created_at) VALUES ('m','t','r','assistant','# 文章\n\n完整正文与引用 [1]',1)",[]).unwrap();
+        let version = service::get_current_version(&conn, "blank").unwrap();
+        let patch = preview_chat_answer(&conn, &fixture.notes, "blank", version, "", "r").unwrap();
+        assert_eq!(patch.new_text, "# 文章\n\n完整正文与引用 [1]");
+        assert_eq!(
+            preview_chat_answer(&conn, &fixture.notes, "blank", version, "", "r")
+                .unwrap()
+                .operation_id,
+            patch.operation_id
+        );
+        let original = std::fs::read_to_string(fixture.notes.join("blank.md")).unwrap();
+        assert!(!original.contains("完整正文"));
+        service::apply_patch(&conn, &fixture.notes, &patch.operation_id).unwrap();
+        assert!(std::fs::read_to_string(fixture.notes.join("blank.md"))
+            .unwrap()
+            .contains("完整正文"));
+        let version = service::get_current_version(&conn, "existing").unwrap();
+        assert!(preview_chat_answer(
+            &conn,
+            &fixture.notes,
+            "existing",
+            version + 1,
+            "保留原文",
+            "r"
+        )
+        .is_err());
+        let patch =
+            preview_chat_answer(&conn, &fixture.notes, "existing", version, "保留原文", "r")
+                .unwrap();
+        assert_eq!(patch.new_text, "保留原文\n\n# 文章\n\n完整正文与引用 [1]");
+        assert!(preview_chat_answer(
+            &conn,
+            &fixture.notes,
+            "existing",
+            version,
+            "保留原文",
+            "missing"
+        )
+        .is_err());
+    }
+}

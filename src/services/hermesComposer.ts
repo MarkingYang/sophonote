@@ -89,7 +89,9 @@ export function parseSkillInvocation(text: string, skills: HermesSkillInfo[]) {
 }
 
 export function capabilityMatches(query: string, ...values: Array<string | null | undefined>): boolean {
-  return matches(query.trim().toLocaleLowerCase(), ...values.filter((value): value is string => value != null));
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = values.filter((value): value is string => value != null).join(' ').toLocaleLowerCase();
+  return words.every((word) => haystack.includes(word));
 }
 
 export function isSessionControlCommand(command: string): 'undo' | 'yolo' | null {

@@ -69,11 +69,11 @@ cargo clippy --all-targets -- -D warnings
 ## 不可破坏的架构边界
 
 - Rust 拥有文件、SQLite、第三方 HTTP、模型、embedding 和子进程副作用；React 只渲染与 invoke。
-- WKWebView 不直连第三方 API；模型调用统一走 Rust `ModelGateway`。
+- WKWebView 不直连第三方 API。非 Agent 模型调用走 Rust `ModelGateway`；Hermes/Pi/Claude Agent 调用由 Rust 校验同一配置与凭据后交受监督引擎执行，不额外建设通用模型代理。
 - `.md` 文件是文档正文真相源；SQLite 保存元数据、索引、运行和操作审计。
 - `appStore`、`projectStore`、`agentStore`、`changeSessionStore` 按生命周期隔离，不合并状态。
 - Inline Completion 不建 Thread/Run；ghost text 不进 Markdown/history，Tab 接受后才成为普通编辑。
-- Agent 只能提出带 baseVersion、TextAnchor 和 hunks 的 Patch；落盘唯一入口是用户批准后的 DocumentService。
+- Agent 修改受管笔记只能提出带 baseVersion、TextAnchor 和 hunks 的 Patch；落盘唯一入口是用户批准后的 DocumentService。授权代码目录的普通文件走 Rust 文件工具与权限策略，不混用笔记写入路径。
 - Skill 不直接授予权限；MCP 默认拒绝，模型不能安装、启动或授权 MCP。
 - 不做飞书式逐次 autosave 历史；内部 version/operation/checkpoint 只服务并发与事故恢复，语义 Git 版本只能由 VersionService 异步建立，恢复仍经 DocumentService Patch。
 

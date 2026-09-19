@@ -4,18 +4,20 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sophonote_lib::sophonote_mcp::{
-    authorize_tool, issue_lease, BridgeInvokeRequest, LeaseError, LeaseRegistry, SophonoteBridge,
-    ModelRoute, BRIDGE_MCP_NAME,
-};
 use sophonote_lib::model::openai_compat::ProviderSnapshot;
 use sophonote_lib::skills::{
     export_skills_readonly_cache, LoadedSkill, SkillExecution, SkillManifest, SkillSource,
 };
+use sophonote_lib::sophonote_mcp::{
+    authorize_tool, issue_lease, BridgeInvokeRequest, LeaseError, LeaseRegistry, ModelRoute,
+    SophonoteBridge, BRIDGE_MCP_NAME,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("sophonote-hermes-h5-{tag}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "sophonote-hermes-h5-{tag}-{}",
+        uuid::Uuid::new_v4()
+    ));
     fs::create_dir_all(&dir).expect("temp");
     dir
 }

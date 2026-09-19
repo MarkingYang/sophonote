@@ -856,7 +856,7 @@ const NoteWorkbench = forwardRef<NoteWorkbenchHandle, NoteWorkbenchProps>(functi
   const renderPreview = (md: string) => (
     <>
       {previewPhase === 'lite' ? (
-        <pre className="whitespace-pre-wrap break-words text-[13px] leading-6 text-[var(--text-secondary)] font-sans m-0">
+        <pre className="sn-note-preview-placeholder whitespace-pre-wrap break-words text-[var(--text-secondary)] font-sans m-0">
           {md.length > 48_000 ? `${md.slice(0, 48_000)}\n…` : md}
         </pre>
       ) : (
@@ -879,7 +879,7 @@ const NoteWorkbench = forwardRef<NoteWorkbenchHandle, NoteWorkbenchProps>(functi
   );
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+    <div className="sn-note-workbench flex-1 min-w-0 flex flex-col overflow-hidden">
       {/* 顶栏：行内标题 + 模式切换 + 保存状态 + ⋯ 菜单。
           NB-20 原意：整行空白可拖窗。
           NB-28 修正：Tauri 的 data-tauri-drag-region 按最近祖先匹配——
@@ -1033,9 +1033,9 @@ const NoteWorkbench = forwardRef<NoteWorkbenchHandle, NoteWorkbenchProps>(functi
               editorIsCurrent && mode !== 'preview'
                 ? 'relative flex-1'
                 : 'invisible pointer-events-none absolute inset-0'
-            } min-w-0 min-h-0 flex flex-col p-6 ${editorIsCurrent && mode === 'split' ? 'border-r border-[var(--border-default)]' : ''}`}
+            } sn-note-editor min-w-0 min-h-0 flex flex-col ${editorIsCurrent && mode === 'split' ? 'border-r border-[var(--border-default)]' : ''}`}
           >
-            <div className="mx-auto flex w-full max-w-3xl flex-1 min-h-0 flex-col">
+            <div className="flex w-full flex-1 min-h-0 flex-col">
               <MarkdownEditor
                 key={`${editorArticleId}:${editorIsCurrent ? editorBump : 0}`}
                 ref={editorIsCurrent ? editorRef : undefined}
@@ -1066,8 +1066,8 @@ const NoteWorkbench = forwardRef<NoteWorkbenchHandle, NoteWorkbenchProps>(functi
         )}
         {mode !== 'edit' && (
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
-            <div ref={previewScrollRef} className="flex-1 min-h-0 overflow-y-auto p-6">
-              <div className="max-w-2xl">
+            <div ref={previewScrollRef} className="sn-note-preview flex-1 min-h-0 overflow-y-auto">
+              <div className="sn-reading-column">
                 {renderPreview(previewMd)}
               </div>
             </div>

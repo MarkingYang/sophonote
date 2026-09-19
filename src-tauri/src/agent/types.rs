@@ -64,7 +64,9 @@ pub struct AgentThread {
     pub collection_id: Option<String>,
 }
 
-fn default_thread_engine() -> String { "hermes".into() }
+fn default_thread_engine() -> String {
+    "hermes".into()
+}
 
 impl AgentThread {
     pub fn new(id: String, title: String, project_id: Option<String>, now_ms: u64) -> Self {

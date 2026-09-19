@@ -13,6 +13,7 @@ pnpm hermes:bundle
 # hdiutil 路径重建，避开内置 create-dmg 的卸载缺陷，也保证镜像内是
 # 已带离线 Gatekeeper ticket 的同一份 App。
 pnpm pi:bundle
+pnpm opencode:bundle
 pnpm tauri build --config src-tauri/tauri.release.conf.json --bundles app
 APP="$ROOT/src-tauri/target/release/bundle.noindex/macos/SophoNote.app"
 VERSION=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)".*/\1/p' "$ROOT/src-tauri/tauri.conf.json" | head -1)

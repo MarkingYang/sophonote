@@ -642,10 +642,13 @@ export const useAppStore = create<AppState>()(
       },
       ensureApiKeyLoaded: async (provider) => {
         if (get().apiKeys[provider] !== undefined) return;
-        let configured = false;
+        let configured: boolean;
         try {
           configured = await tauri.hasApiKey(provider);
-        } catch {}
+        } catch {
+          // 锁定/授权失败是未知状态，不能永久缓存成“未配置”。
+          return;
+        }
         set((state) =>
           state.apiKeys[provider] !== undefined
             ? state
@@ -653,7 +656,7 @@ export const useAppStore = create<AppState>()(
         );
       },
       loadSettings: async () => {
-        // 从 SQLite 读取 AI 配置（与内置预设合并），再从钥匙串逐个读取各供应商的 Key
+        // 从 SQLite 读取非密钥 AI 配置（与内置预设合并）。
         try {
           const raw = await tauri.getSetting('ai_config');
           let saved: Partial<AppSettings['aiConfig']> = {};

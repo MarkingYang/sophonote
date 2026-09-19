@@ -300,7 +300,10 @@ mod tests {
             PathBuf::from("/tmp/sophonote-layout/sophonote.db")
         );
         assert_eq!(layout.notes, PathBuf::from("/tmp/sophonote-layout/notes"));
-        assert_eq!(layout.version, PathBuf::from("/tmp/sophonote-layout/version"));
+        assert_eq!(
+            layout.version,
+            PathBuf::from("/tmp/sophonote-layout/version")
+        );
         assert_eq!(
             layout.workspace,
             PathBuf::from("/tmp/sophonote-layout/workspace")

@@ -36,6 +36,7 @@ else
 fi
 
 pnpm pi:bundle
+pnpm opencode:bundle
 pnpm tauri build --bundles nsis
 
 NSIS=$(find "$ROOT/src-tauri/target/release/bundle/nsis" -maxdepth 1 \( -name '*setup.exe' -o -name '*.exe' \) -print 2>/dev/null | head -1 || true)

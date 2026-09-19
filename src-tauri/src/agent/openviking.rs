@@ -1,17 +1,34 @@
 //! OpenViking 配置投影：Hermes 拥有非密钥配置，Host 拥有凭据与网络探测。
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+mod run_memory;
+pub(crate) use run_memory::RunMemory;
 
-use reqwest::{header::HeaderMap, Method, Url};
+use reqwest::{header::HeaderMap, Method};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
 use crate::commands::ApiResponse;
 
 pub const KEYCHAIN_PROVIDER: &str = "openviking-memory";
 const CONFIG_PATH: &str = "/api/memory/providers/openviking/config";
-const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:1933";
-const RESPONSE_LIMIT: usize = 64 * 1024;
+pub const DEFAULT_ENDPOINT: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
+const MEMORY_ROOT: &str = "viking://~/memories";
+const HERMES_MEMORY_ROOT: &str = "viking://~/peers/hermes/memories";
+const HOST_ENGINES: [&str; 3] = ["pi", "claude_code", "opencode"];
+const MEMORY_ROOTS: [&str; 5] = [
+    MEMORY_ROOT,
+    HERMES_MEMORY_ROOT,
+    "viking://~/peers/pi/memories",
+    "viking://~/peers/claude_code/memories",
+    "viking://~/peers/opencode/memories",
+];
+static CONFIG_GENERATION: AtomicU64 = AtomicU64::new(0);
+const CONTENT_LIMIT: usize = 256 * 1024;
+const PAGE_SIZE: usize = 100;
+const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -30,6 +47,8 @@ pub struct OpenVikingSaveRequest {
     /// 空值保留已有 Key；从不回传或转发给 Hermes 配置 API。
     pub api_key: Option<String>,
     pub consent: bool,
+    #[serde(default)]
+    pub all_engines: bool,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +65,7 @@ pub struct OpenVikingStatus {
     pub active_provider: String,
     pub available: bool,
     pub key_configured: bool,
+    pub host_engines_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -59,51 +79,35 @@ pub struct OpenVikingSaveResult {
 #[serde(rename_all = "camelCase")]
 pub struct OpenVikingProbe {
     pub version: String,
+    pub engines: Vec<EngineProbe>,
 }
 
-fn normalized_config(mut config: OpenVikingConfig) -> Result<OpenVikingConfig, String> {
-    let url = Url::parse(config.endpoint.trim())
-        .map_err(|_| "请输入有效的 OpenViking HTTP(S) 服务地址")?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineProbe {
+    pub engine: String,
+    pub success: bool,
+    pub message: String,
+}
+
+fn cloud_config() -> OpenVikingConfig {
+    OpenVikingConfig {
+        endpoint: DEFAULT_ENDPOINT.into(),
+        account: String::new(),
+        user: String::new(),
+        agent: "hermes".into(),
+    }
+}
+
+fn normalized_config(config: OpenVikingConfig) -> Result<OpenVikingConfig, String> {
+    if config.endpoint.trim().trim_end_matches('/') != DEFAULT_ENDPOINT
+        || !config.account.is_empty()
+        || !config.user.is_empty()
+        || config.agent != "hermes"
     {
-        return Err("服务地址仅支持 HTTP(S)，不能包含用户名、密码、查询参数或片段".into());
+        return Err("记忆仅支持火山 OpenViking 云端服务，请重新读取配置后保存 API Key".into());
     }
-    if let Some(host) = url.host_str() {
-        let ip = host
-            .trim_matches(['[', ']'])
-            .parse::<std::net::IpAddr>()
-            .ok();
-        if host.eq_ignore_ascii_case("metadata.google.internal")
-            || ip.is_some_and(|ip| match ip {
-                std::net::IpAddr::V4(ip) => {
-                    ip.is_unspecified() || ip.is_link_local() || ip.is_multicast()
-                }
-                std::net::IpAddr::V6(ip) => {
-                    ip.is_unspecified() || ip.is_unicast_link_local() || ip.is_multicast()
-                }
-            })
-        {
-            return Err("此地址不能用作 OpenViking 服务".into());
-        }
-    }
-    config.endpoint = url.as_str().trim_end_matches('/').to_string();
-    for value in [&mut config.account, &mut config.user, &mut config.agent] {
-        *value = value.trim().to_string();
-        if value.len() > 256 || value.chars().any(char::is_control) || !value.is_ascii() {
-            return Err(
-                "账户、用户和 Agent 标识需为不超过 256 字节的 ASCII 文本，不能含控制字符".into(),
-            );
-        }
-    }
-    if config.agent.is_empty() {
-        config.agent = "hermes".into();
-    }
-    Ok(config)
+    Ok(cloud_config())
 }
 
 fn normalized_key(key: Option<String>) -> Result<Option<String>, String> {
@@ -120,7 +124,7 @@ fn normalized_key(key: Option<String>) -> Result<Option<String>, String> {
 }
 
 /// 拒绝优先级高于 config.yaml 的旧配置，避免保存成功却连接另一服务。
-fn check_managed_home() -> Result<(), String> {
+fn check_managed_home() -> Result<Value, String> {
     if super::hermes::bundled_runtime::should_use_external_debug_gateway() {
         return Err(
             "OpenViking 设置仅支持 SophoNote 管理的 Hermes Sidecar，请先关闭外部 Gateway 附着"
@@ -149,7 +153,7 @@ fn check_managed_home() -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
         Err(_) => return Err("无法检查 Hermes 私有环境配置".into()),
     }
-    Ok(())
+    Ok(config)
 }
 
 async fn dashboard(method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
@@ -172,55 +176,46 @@ async fn dashboard(method: Method, path: &str, body: Option<Value>) -> Result<Va
         })
 }
 
-fn project_status(memory: &Value, payload: &Value, key_configured: bool) -> OpenVikingStatus {
-    let field = |key: &str, fallback: &str| {
-        payload
-            .get("fields")
-            .and_then(Value::as_array)
-            .and_then(|fields| {
-                fields
-                    .iter()
-                    .find(|field| field.get("key").and_then(Value::as_str) == Some(key))
-            })
-            .and_then(|field| field.get("value"))
+fn host_engine_enabled(memory: &Value, engine: &str) -> bool {
+    HOST_ENGINES.contains(&engine)
+        && memory.get("provider").and_then(Value::as_str) == Some("openviking")
+        && memory
+            .pointer("/openviking/endpoint")
             .and_then(Value::as_str)
-            .unwrap_or(fallback)
-            .to_string()
-    };
+            == Some(DEFAULT_ENDPOINT)
+        && memory
+            .get("sophonote_engines")
+            .and_then(Value::as_array)
+            .is_some_and(|engines| engines.iter().any(|e| e.as_str() == Some(engine)))
+}
+
+fn project_status(memory: &Value, key_configured: bool) -> OpenVikingStatus {
     OpenVikingStatus {
-        config: OpenVikingConfig {
-            endpoint: field("endpoint", DEFAULT_ENDPOINT),
-            account: field("account", ""),
-            user: field("user", ""),
-            agent: field("agent", "hermes"),
+        config: cloud_config(),
+        active_provider: if memory.get("provider").and_then(Value::as_str) == Some("openviking")
+            && memory
+                .pointer("/openviking/endpoint")
+                .and_then(Value::as_str)
+                == Some(DEFAULT_ENDPOINT)
+        {
+            "openviking".into()
+        } else {
+            String::new()
         },
-        active_provider: memory
-            .get("active")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        available: payload
-            .get("fields")
-            .and_then(Value::as_array)
-            .is_some_and(|fields| {
-                fields
-                    .iter()
-                    .any(|f| f.get("key").and_then(Value::as_str) == Some("endpoint"))
-            }),
+        available: true,
         key_configured,
+        host_engines_enabled: HOST_ENGINES
+            .iter()
+            .all(|engine| host_engine_enabled(memory, engine)),
     }
 }
 
 #[tauri::command]
 pub async fn agent_openviking_status(app: AppHandle) -> ApiResponse<OpenVikingStatus> {
     let result = async {
-        check_managed_home()?;
-        let (memory, config) = tokio::try_join!(
-            dashboard(Method::GET, "/api/memory", None),
-            dashboard(Method::GET, CONFIG_PATH, None)
-        )?;
-        let key = crate::commands::get_cached_api_key(&app, KEYCHAIN_PROVIDER)?;
-        Ok(project_status(&memory, &config, !key.is_empty()))
+        let config = check_managed_home()?;
+        let configured = crate::commands::has_api_key(&app, KEYCHAIN_PROVIDER)?;
+        Ok(project_status(&config["memory"], configured))
     }
     .await;
     match result {
@@ -241,12 +236,24 @@ pub async fn agent_openviking_save(
         }
         let config = normalized_config(request.config)?;
         let key = normalized_key(request.api_key)?;
+        if key.is_none() && !crate::commands::has_api_key(&app, KEYCHAIN_PROVIDER)? {
+            return Err("请填写火山 OpenViking API Key".into());
+        }
         check_managed_home()?;
         let schema = dashboard(Method::GET, CONFIG_PATH, None).await?;
-        if !project_status(&json!({}), &schema, false).available {
+        if !schema
+            .get("fields")
+            .and_then(Value::as_array)
+            .is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|f| f.get("key").and_then(Value::as_str) == Some("endpoint"))
+            })
+        {
             return Err("当前 Hermes 未提供 OpenViking 插件，请先更新 Hermes Sidecar".into());
         }
         let mut credential_storage = None;
+        CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
         if let Some(key) = key {
             let saved =
                 crate::commands::keychain_save_api_key(app.clone(), KEYCHAIN_PROVIDER.into(), key)
@@ -256,15 +263,23 @@ pub async fn agent_openviking_save(
             }
             credential_storage = saved.data;
         }
-        dashboard(Method::PUT, CONFIG_PATH, Some(json!({"values": config})))
-            .await
-            .map_err(|error| {
-                if credential_storage.is_some() {
-                    format!("凭据已保存；连接配置未保存：{error}")
-                } else {
-                    error
-                }
-            })?;
+        dashboard(
+            Method::PUT,
+            "/api/config",
+            Some(json!({"config": {"memory": {
+                "provider": "openviking", "memory_enabled": false, "user_profile_enabled": false,
+                "openviking": config,
+                "sophonote_engines": if request.all_engines { HOST_ENGINES.to_vec() } else { vec![] }
+            }}})),
+        )
+        .await
+        .map_err(|error| {
+            if credential_storage.is_some() {
+                format!("凭据已保存；连接配置未保存：{error}")
+            } else {
+                error
+            }
+        })?;
         Ok(OpenVikingSaveResult {
             credential_storage,
             restart_required: true,
@@ -281,21 +296,26 @@ pub async fn agent_openviking_save(
 pub async fn agent_openviking_disable() -> ApiResponse<OpenVikingSaveResult> {
     let _lock = SAVE_LOCK.lock().await;
     let result = async {
-        check_managed_home()?;
-        let status = dashboard(Method::GET, "/api/memory", None).await?;
-        // 不覆盖用户在 Hermes 中选择的其它 Memory Provider。
-        let changed = status.get("active").and_then(Value::as_str) == Some("openviking");
-        if changed {
-            dashboard(
-                Method::PUT,
-                "/api/memory/provider",
-                Some(json!({"provider": ""})),
-            )
-            .await?;
+        let config = check_managed_home()?;
+        CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let provider = config
+            .pointer("/memory/provider")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !provider.is_empty() && provider != "openviking" {
+            return Err("当前使用其它记忆服务，请先在 Hermes 中停用该服务".into());
         }
+        dashboard(
+            Method::PUT,
+            "/api/config",
+            Some(json!({"config": {"memory": {
+                "provider": "", "memory_enabled": false, "user_profile_enabled": false, "sophonote_engines": []
+            }}})),
+        )
+        .await?;
         Ok(OpenVikingSaveResult {
             credential_storage: None,
-            restart_required: changed,
+            restart_required: true,
         })
     }
     .await;
@@ -314,27 +334,11 @@ fn auth_headers(config: &OpenVikingConfig, key: &str) -> Result<HeaderMap, Strin
         );
         Ok(())
     };
-    if !key.is_empty() {
-        insert("x-api-key", key)?;
-        insert("authorization", &format!("Bearer {key}"))?;
-    } else {
-        insert(
-            "x-openviking-account",
-            if config.account.is_empty() {
-                "default"
-            } else {
-                &config.account
-            },
-        )?;
-        insert(
-            "x-openviking-user",
-            if config.user.is_empty() {
-                "default"
-            } else {
-                &config.user
-            },
-        )?;
+    if key.is_empty() {
+        return Err("请先保存火山 OpenViking API Key".into());
     }
+    insert("x-api-key", key)?;
+    insert("authorization", &format!("Bearer {key}"))?;
     insert("x-openviking-actor-peer", &config.agent)?;
     Ok(headers)
 }
@@ -344,7 +348,7 @@ async fn response_json(request: reqwest::RequestBuilder) -> Result<Value, String
         if error.is_timeout() {
             "OpenViking 连接超时，请检查服务地址与网络"
         } else {
-            "无法连接 OpenViking，请检查服务是否已启动及网络配置"
+            "无法连接火山 OpenViking，请检查网络"
         }
         .to_string()
     })?;
@@ -353,7 +357,9 @@ async fn response_json(request: reqwest::RequestBuilder) -> Result<Value, String
         return Err(format!(
             "OpenViking 请求失败（HTTP {}）{}",
             status.as_u16(),
-            if matches!(status.as_u16(), 401 | 403) {
+            if status.as_u16() == 402 {
+                "，云端套餐额度或付费状态不可用，请到火山控制台检查套餐"
+            } else if matches!(status.as_u16(), 401 | 403) {
                 "，请检查 API Key 与账户权限"
             } else {
                 ""
@@ -374,47 +380,41 @@ async fn response_json(request: reqwest::RequestBuilder) -> Result<Value, String
     serde_json::from_slice(&bytes).map_err(|_| "OpenViking 返回了无效的 JSON 响应".into())
 }
 
-async fn probe(config: &OpenVikingConfig, key: &str) -> Result<OpenVikingProbe, String> {
-    let url = Url::parse(&config.endpoint).map_err(|_| "服务地址无效")?;
-    let mut builder = reqwest::Client::builder()
+fn cloud_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(8));
-    if matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")) {
-        builder = builder.no_proxy();
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "无法创建 OpenViking 连接".into())
+}
+
+fn api_result(value: Value) -> Result<Value, String> {
+    if value.get("status").and_then(Value::as_str) != Some("ok") {
+        return Err("OpenViking 未确认操作成功，请刷新后重试".into());
     }
-    let client = builder.build().map_err(|_| "无法创建 OpenViking 连接")?;
-    // 在服务身份确认前绝不发送 Key。
-    let health = response_json(client.get(format!("{}/health", config.endpoint))).await?;
-    let version = health
-        .get("version")
-        .and_then(Value::as_str)
-        .filter(|v| !v.trim().is_empty());
-    if health.get("status").and_then(Value::as_str) != Some("ok")
-        || health.get("healthy").and_then(Value::as_bool) != Some(true)
-        || version.is_none()
-    {
-        return Err(
-            "服务未返回健康的 OpenViking 响应，请确认地址并使用 OpenViking 0.2.10 或更新版本"
-                .into(),
-        );
+    value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "OpenViking 响应缺少结果".into())
+}
+
+async fn probe(config: &OpenVikingConfig, key: &str) -> Result<OpenVikingProbe, String> {
+    if key.is_empty() {
+        return Err("请填写火山 OpenViking API Key".into());
     }
-    let status = response_json(
-        client
-            .get(format!("{}/api/v1/system/status", config.endpoint))
-            .headers(auth_headers(config, key)?),
-    )
-    .await?;
-    if status.get("status").and_then(Value::as_str) != Some("ok")
-        || status
-            .pointer("/result/initialized")
-            .and_then(Value::as_bool)
-            != Some(true)
-    {
-        return Err("OpenViking 已响应，但服务尚未完成初始化".into());
-    }
+    api_result(
+        response_json(
+            cloud_client()?
+                .get(format!("{}/api/v1/fs/ls", config.endpoint))
+                .headers(auth_headers(config, key)?)
+                .query(&[("uri", "viking://~"), ("limit", "1")]),
+        )
+        .await?,
+    )?;
     Ok(OpenVikingProbe {
-        version: version.unwrap_or_default().chars().take(80).collect(),
+        version: "火山云端服务".into(),
+        engines: vec![],
     })
 }
 
@@ -429,7 +429,282 @@ pub async fn agent_openviking_test(
             Some(key) => key,
             None => crate::commands::get_cached_api_key(&app, KEYCHAIN_PROVIDER)?,
         };
-        probe(&config, &key).await
+        let mut result = probe(&config, &key).await?;
+        for engine in ["hermes", "pi", "claude_code", "opencode"] {
+            let mut scoped = config.clone();
+            scoped.agent = engine.into();
+            let checked = probe(&scoped, &key).await;
+            result.engines.push(EngineProbe {
+                engine: engine.into(),
+                success: checked.is_ok(),
+                message: checked
+                    .err()
+                    .unwrap_or_else(|| "云端鉴权与用户目录访问通过".into()),
+            });
+        }
+        Ok(result)
+    }
+    .await;
+    match result {
+        Ok(value) => ApiResponse::ok(value),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryEntry {
+    pub uri: String,
+    pub name: String,
+    pub is_directory: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryPage {
+    pub entries: Vec<MemoryEntry>,
+    pub has_more: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDocument {
+    pub uri: String,
+    pub content: String,
+    pub revision: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryWrite {
+    pub uri: String,
+    pub content: String,
+    pub base_revision: String,
+}
+
+fn memory_uri(uri: &str, file: bool) -> Result<&str, String> {
+    let suffix = MEMORY_ROOTS
+        .iter()
+        .find_map(|root| uri.strip_prefix(root))
+        .ok_or("只允许访问当前用户的云端 memories 目录")?;
+    if (suffix.is_empty() && file)
+        || (!suffix.is_empty() && !suffix.starts_with('/'))
+        || uri.len() > 2048
+        || uri.contains(['%', '?', '#', '\\'])
+        || uri.chars().any(char::is_control)
+        || suffix
+            .trim_start_matches('/')
+            .split('/')
+            .any(|s| s == "." || s == ".." || s.starts_with('.'))
+        || (!suffix.is_empty() && suffix[1..].split('/').any(str::is_empty))
+    {
+        return Err("记忆路径无效".into());
+    }
+    if file && !uri.ends_with(".md") && !uri.ends_with(".txt") {
+        return Err("仅支持读取和编辑 Markdown 或文本记忆".into());
+    }
+    Ok(uri)
+}
+
+/// Cloud writes append managed MEMORY_FIELDS. The editor sends only visible body;
+/// optimistic concurrency still hashes the entire stored record, including metadata.
+fn visible_memory(content: &str) -> &str {
+    let mut body = content.trim_end();
+    loop {
+        let Some(start) = body.rfind("<!-- MEMORY_FIELDS") else {
+            return body;
+        };
+        let Some(metadata) = body[start + "<!-- MEMORY_FIELDS".len()..].strip_suffix("-->") else {
+            return body;
+        };
+        if !serde_json::from_str::<Value>(metadata.trim()).is_ok_and(|v| v.is_object()) {
+            return body;
+        }
+        body = body[..start].trim_end();
+    }
+}
+
+fn revision(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
+
+struct MemoryClient {
+    client: reqwest::Client,
+    config: OpenVikingConfig,
+    key: String,
+}
+impl MemoryClient {
+    fn from_app(app: &AppHandle) -> Result<Self, String> {
+        let key = crate::commands::get_cached_api_key(app, KEYCHAIN_PROVIDER)?;
+        if key.is_empty() {
+            return Err("请先保存火山 OpenViking API Key".into());
+        }
+        Ok(Self {
+            client: cloud_client()?,
+            config: cloud_config(),
+            key,
+        })
+    }
+    fn for_uri(mut self, uri: &str) -> Result<Self, String> {
+        memory_uri(uri, false)?;
+        if let Some(peer) = uri
+            .strip_prefix("viking://~/peers/")
+            .and_then(|s| s.split('/').next())
+        {
+            self.config.agent = peer.into();
+        }
+        Ok(self)
+    }
+    fn request(&self, method: Method, path: &str) -> Result<reqwest::RequestBuilder, String> {
+        Ok(self
+            .client
+            .request(method, format!("{}{path}", self.config.endpoint))
+            .headers(auth_headers(&self.config, &self.key)?))
+    }
+    async fn list(&self, uri: &str, offset: usize) -> Result<MemoryPage, String> {
+        memory_uri(uri, false)?;
+        if offset > 100_000 {
+            return Err("目录页数超过限制".into());
+        }
+        let result = api_result(
+            response_json(self.request(Method::GET, "/api/v1/fs/ls")?.query(&[
+                ("uri", uri),
+                ("output", "original"),
+                ("offset", &offset.to_string()),
+                ("limit", &PAGE_SIZE.to_string()),
+                ("sort_by", "name"),
+            ]))
+            .await?,
+        )?;
+        project_entries(uri, result)
+    }
+    async fn read(&self, uri: &str) -> Result<MemoryDocument, String> {
+        memory_uri(uri, true)?;
+        let result = api_result(
+            response_json(
+                self.request(Method::GET, "/api/v1/content/read")?
+                    .query(&[("uri", uri), ("raw", "true")]),
+            )
+            .await?,
+        )?;
+        let content = result
+            .as_str()
+            .ok_or("OpenViking 正文格式无效")?
+            .to_string();
+        if content.len() > CONTENT_LIMIT {
+            return Err("记忆正文超过 256 KiB 编辑限制".into());
+        }
+        Ok(MemoryDocument {
+            uri: uri.into(),
+            revision: revision(&content),
+            content: visible_memory(&content).into(),
+        })
+    }
+    async fn write(&self, request: MemoryWrite) -> Result<MemoryDocument, String> {
+        memory_uri(&request.uri, true)?;
+        if request.content.len() > CONTENT_LIMIT {
+            return Err("记忆正文超过 256 KiB 编辑限制".into());
+        }
+        let latest = self.read(&request.uri).await?;
+        if latest.revision != request.base_revision {
+            return Err("云端记忆已被修改，本次未写入；请保留草稿并重新读取后合并".into());
+        }
+        // Upstream has no conditional-write/CAS. This detects intervening edits,
+        // but cannot lock out another cloud client between this read and write.
+        api_result(
+            response_json(self.request(Method::POST, "/api/v1/content/write")?.json(
+                &json!({"uri":request.uri,"content":request.content,"mode":"replace","wait":false}),
+            ))
+            .await
+            .map_err(|error| format!("{error}；本次写入是否完成尚未确认，请保留草稿并刷新核对"))?,
+        )?;
+        // A failed verification must not report a clean failure or retry the write.
+        let saved = self
+            .read(&request.uri)
+            .await
+            .map_err(|_| "写入已提交，但回读确认失败；请保留草稿并刷新确认，不要重复提交")?;
+        if saved.content != request.content.trim_end() {
+            return Err("写入已提交，但云端内容又发生变化；请保留草稿并刷新确认".into());
+        }
+        Ok(saved)
+    }
+}
+
+fn project_entries(uri: &str, result: Value) -> Result<MemoryPage, String> {
+    let items = result.as_array().ok_or("OpenViking 目录格式无效")?;
+    let mut entries = vec![];
+    for item in items.iter().take(PAGE_SIZE) {
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("OpenViking 目录缺少名称")?;
+        if name.contains('/') || name.is_empty() {
+            return Err("OpenViking 返回无效目录名称".into());
+        }
+        if name.starts_with('.') {
+            continue;
+        }
+        let entry_uri = format!("{uri}/{name}");
+        memory_uri(&entry_uri, false)?;
+        let is_directory = item
+            .get("isDir")
+            .or_else(|| item.get("is_dir"))
+            .and_then(Value::as_bool)
+            .ok_or("OpenViking 目录缺少类型")?;
+        entries.push(MemoryEntry {
+            uri: entry_uri,
+            name: name.into(),
+            is_directory,
+        });
+    }
+    Ok(MemoryPage {
+        entries,
+        has_more: items.len() >= PAGE_SIZE,
+    })
+}
+
+#[tauri::command]
+pub async fn agent_openviking_list(
+    app: AppHandle,
+    uri: String,
+    offset: usize,
+) -> ApiResponse<MemoryPage> {
+    let _lock = SAVE_LOCK.lock().await;
+    let result = async {
+        MemoryClient::from_app(&app)?
+            .for_uri(&uri)?
+            .list(&uri, offset)
+            .await
+    }
+    .await;
+    match result {
+        Ok(value) => ApiResponse::ok(value),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+#[tauri::command]
+pub async fn agent_openviking_read(app: AppHandle, uri: String) -> ApiResponse<MemoryDocument> {
+    let _lock = SAVE_LOCK.lock().await;
+    let result = async {
+        MemoryClient::from_app(&app)?
+            .for_uri(&uri)?
+            .read(&uri)
+            .await
+    }
+    .await;
+    match result {
+        Ok(value) => ApiResponse::ok(value),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+#[tauri::command]
+pub async fn agent_openviking_write(
+    app: AppHandle,
+    request: MemoryWrite,
+) -> ApiResponse<MemoryDocument> {
+    let _lock = SAVE_LOCK.lock().await;
+    let result = async {
+        MemoryClient::from_app(&app)?
+            .for_uri(&request.uri)?
+            .write(request)
+            .await
     }
     .await;
     match result {
@@ -443,78 +718,77 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn config(endpoint: &str) -> OpenVikingConfig {
-        OpenVikingConfig {
-            endpoint: endpoint.into(),
-            account: "".into(),
-            user: "".into(),
-            agent: "hermes".into(),
-        }
-    }
-
     #[test]
-    fn validates_addresses_without_echoing_credentials() {
+    fn only_fixed_cloud_endpoint_and_identity_are_accepted() {
         for endpoint in [
-            "file:///etc/passwd",
+            "http://127.0.0.1:1933",
             "https://user:secret@example.com",
-            "http://localhost?token=secret",
-            "http://169.254.169.254",
-            "http://[::]",
+            "https://api.vikingdb.cn-beijing.volces.com.evil/openviking",
+            "file:///etc/passwd",
         ] {
-            let error = normalized_config(config(endpoint)).err().unwrap();
+            let mut config = cloud_config();
+            config.endpoint = endpoint.into();
+            let error = normalized_config(config).err().unwrap();
             assert!(!error.contains("secret"));
         }
         assert_eq!(
-            normalized_config(config(" https://example.com/viking/ "))
-                .unwrap()
-                .endpoint,
-            "https://example.com/viking"
-        );
-        assert_eq!(
-            normalized_config(config("http://[::1]:1933"))
-                .unwrap()
-                .endpoint,
-            "http://[::1]:1933"
+            normalized_config(cloud_config()).unwrap().endpoint,
+            DEFAULT_ENDPOINT
         );
         assert!(normalized_key(Some("a\nb".into())).is_err());
-        assert!(normalized_key(Some("  ".into())).unwrap().is_none());
     }
-
     #[test]
-    fn status_never_projects_secret_fields_or_unknown_config() {
-        let status = project_status(
-            &json!({"active":"openviking"}),
-            &json!({"fields":[
-                {"key":"endpoint","value":"http://localhost:1933"},
-                {"key":"api_key","value":"never-expose-this"},
-                {"key":"future_secret","value":"never-expose-this"}
-            ]}),
-            true,
+    fn status_hides_secrets_and_never_projects_local_connection() {
+        let memory = json!({"provider":"openviking", "openviking":{"endpoint":"http://localhost:1933", "api_key":"private-key"}});
+        let status = project_status(&memory, true);
+        assert_eq!(status.active_provider, "");
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("private-key") && !serialized.contains("localhost"));
+        assert!(status.key_configured);
+    }
+    #[test]
+    fn memory_paths_cannot_escape_to_other_users_or_managed_files() {
+        for uri in [
+            "viking://~/privacy/secret.md",
+            "viking://user/other/memories/a.md",
+            "viking://~/memories/../privacy/a.md",
+            "viking://~/memories/%2e%2e/a.md",
+            "viking://~/memories//a.md",
+            "viking://~/memories2/a.md",
+            "viking://~/peers/other/memories/a.md",
+            "viking://~/peers/hermes/privacy/key.md",
+            "viking://~/memories/.abstract.md",
+        ] {
+            assert!(memory_uri(uri, true).is_err(), "{uri}");
+        }
+        assert!(memory_uri("viking://~/peers/hermes/memories/preferences/a.md", true).is_ok());
+        assert!(memory_uri(MEMORY_ROOT, true).is_err());
+        assert!(memory_uri(MEMORY_ROOT, false).is_ok());
+        assert!(memory_uri("viking://~/memories/preferences/偏好.md", true).is_ok());
+    }
+    #[test]
+    fn directory_projection_uses_safe_child_names_not_untrusted_uris() {
+        let page = project_entries(
+            MEMORY_ROOT,
+            json!([
+                {"name":"preferences", "isDir":true, "uri":"viking://user/other/privacy"},
+                {"name":"note.md", "isDir":false}, {"name":".abstract.md", "isDir":false}
+            ]),
+        )
+        .unwrap();
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].uri, "viking://~/memories/preferences");
+        assert!(
+            project_entries(MEMORY_ROOT, json!([{"name":"../private.md","isDir":false}])).is_err()
         );
-        let text = serde_json::to_string(&status).unwrap();
-        assert!(!text.contains("never-expose"));
-        assert!(status.key_configured && status.available);
-        assert_eq!(status.config.agent, "hermes");
     }
 
-    #[test]
-    fn headers_match_hermes_key_and_local_identity_modes() {
-        let headers = auth_headers(&config(DEFAULT_ENDPOINT), "test-key").unwrap();
-        assert_eq!(headers["x-api-key"], "test-key");
-        assert_eq!(headers["authorization"], "Bearer test-key");
-        assert_eq!(headers["x-openviking-actor-peer"], "hermes");
-        assert!(!headers.contains_key("x-openviking-user"));
-        let headers = auth_headers(&config(DEFAULT_ENDPOINT), "").unwrap();
-        assert!(!headers.contains_key("x-api-key"));
-        assert_eq!(headers["x-openviking-account"], "default");
-        assert_eq!(headers["x-openviking-user"], "default");
-    }
-
-    async fn fixture(
-        responses: Vec<(u16, String)>,
-    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    pub(super) async fn fixture(
+        responses: Vec<(u16, Value)>,
+    ) -> (MemoryClient, tokio::task::JoinHandle<Vec<String>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let mut config = cloud_config();
+        config.endpoint = format!("http://{}", listener.local_addr().unwrap());
         let handle = tokio::spawn(async move {
             let mut requests = vec![];
             for (code, body) in responses {
@@ -525,76 +799,156 @@ mod tests {
                         .unwrap();
                 let mut data = vec![];
                 loop {
-                    let mut buffer = [0; 1024];
-                    let size = stream.read(&mut buffer).await.unwrap();
-                    data.extend_from_slice(&buffer[..size]);
-                    if size == 0 || data.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 4096];
+                    let n = stream.read(&mut buffer).await.unwrap();
+                    data.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = data.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&data[..end]).to_lowercase();
+                        let size = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.strip_prefix("content-length: ")
+                                    .and_then(|s| s.parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if data.len() >= end + 4 + size {
+                            break;
+                        }
+                    }
+                    if n == 0 {
                         break;
                     }
                 }
-                requests.push(String::from_utf8_lossy(&data).to_lowercase());
-                let response = format!("HTTP/1.1 {code} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nLocation: http://127.0.0.1:1/leak\r\n\r\n{body}", body.len());
-                let _ = stream.write_all(response.as_bytes()).await;
+                requests.push(String::from_utf8_lossy(&data).to_string());
+                let body = body.to_string();
+                let response=format!("HTTP/1.1 {code} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nLocation: http://127.0.0.1:1/leak\r\n\r\n{body}",body.len());
+                stream.write_all(response.as_bytes()).await.unwrap();
             }
             requests
         });
-        (endpoint, handle)
+        (
+            MemoryClient {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .unwrap(),
+                config,
+                key: "fixture-key".into(),
+            },
+            handle,
+        )
     }
-
-    fn health() -> String {
-        json!({"status":"ok","healthy":true,"version":"0.2.10"}).to_string()
+    fn ok(result: Value) -> Value {
+        json!({"status":"ok","result":result})
     }
-
     #[tokio::test]
-    async fn probe_identifies_server_before_sending_key_and_preserves_base_path() {
-        let (endpoint, requests) = fixture(vec![
-            (200, health()),
-            (
-                200,
-                json!({"status":"ok","result":{"initialized":true}}).to_string(),
-            ),
+    async fn cloud_metadata_is_not_resubmitted_or_mistaken_for_a_conflict() {
+        let raw = "original\n\n<!-- MEMORY_FIELDS\n{\"version\":1,\"scope\":\"test\"}\n-->";
+        let edited = "edited\n\n<!-- MEMORY_FIELDS\n{\"version\":2,\"scope\":\"test\"}\n-->";
+        let (client, requests) = fixture(vec![
+            (200, ok(json!(raw))),
+            (200, ok(json!({}))),
+            (200, ok(json!(edited))),
         ])
         .await;
-        assert_eq!(
-            probe(&config(&format!("{endpoint}/viking")), "fixture-key")
-                .await
-                .unwrap()
-                .version,
-            "0.2.10"
-        );
+        let saved = client
+            .write(MemoryWrite {
+                uri: format!("{MEMORY_ROOT}/note.md"),
+                content: "edited\n".into(),
+                base_revision: revision(raw),
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.content, "edited");
+        assert_eq!(saved.revision, revision(edited));
         let requests = requests.await.unwrap();
-        assert!(requests[0].starts_with("get /viking/health "));
-        assert!(!requests[0].contains("fixture-key"));
-        assert!(requests[1].starts_with("get /viking/api/v1/system/status "));
-        assert!(requests[1].contains("x-api-key: fixture-key"));
+        assert!(!requests[1].contains("MEMORY_FIELDS"));
+        assert_eq!(
+            visible_memory("body\n<!-- MEMORY_FIELDS invalid -->"),
+            "body\n<!-- MEMORY_FIELDS invalid -->"
+        );
     }
 
     #[tokio::test]
-    async fn probe_rejects_false_health_redirects_and_oversize_without_leaking_key() {
-        for response in [
-            (200, "{\"status\":\"ok\"}".into()),
-            (302, "redirect".into()),
-            (200, "x".repeat(RESPONSE_LIMIT + 1)),
-        ] {
-            let (endpoint, requests) = fixture(vec![response]).await;
-            assert!(probe(&config(&endpoint), "fixture-key").await.is_err());
-            assert!(!requests.await.unwrap()[0].contains("fixture-key"));
-        }
-    }
-
-    #[tokio::test]
-    async fn probe_reports_auth_failure_without_echoing_response() {
-        let (endpoint, requests) = fixture(vec![
-            (200, health()),
-            (401, "server echoed fixture-key".into()),
-        ])
-        .await;
-        let error = probe(&config(&endpoint), "fixture-key")
+    async fn stale_revision_does_not_issue_write() {
+        let (client, requests) = fixture(vec![(200, ok(json!("newer cloud content")))]).await;
+        let error = client
+            .write(MemoryWrite {
+                uri: format!("{MEMORY_ROOT}/note.md"),
+                content: "edited".into(),
+                base_revision: revision("old"),
+            })
             .await
             .err()
             .unwrap();
-        assert!(error.contains("401"));
-        assert!(!error.contains("fixture-key"));
-        assert_eq!(requests.await.unwrap().len(), 2);
+        assert!(error.contains("已被修改"));
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /api/v1/content/read?"));
+        assert!(requests[0].contains("raw=true"));
+    }
+    #[tokio::test]
+    async fn write_uses_full_original_version_and_verifies_saved_text() {
+        let (client, requests) = fixture(vec![
+            (200, ok(json!("original"))),
+            (200, ok(json!({}))),
+            (200, ok(json!("edited"))),
+        ])
+        .await;
+        let saved = client
+            .write(MemoryWrite {
+                uri: format!("{MEMORY_ROOT}/note.md"),
+                content: "edited".into(),
+                base_revision: revision("original"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.revision, revision("edited"));
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].starts_with("POST /api/v1/content/write "));
+        assert!(requests[1].contains("\"mode\":\"replace\""));
+    }
+    #[tokio::test]
+    async fn quota_auth_redirect_and_oversize_fail_without_echoing_secrets() {
+        for (code, body) in [
+            (402, json!({"secret":"fixture-key"})),
+            (401, json!({"secret":"fixture-key"})),
+            (302, json!({})),
+            (200, ok(json!("x".repeat(RESPONSE_LIMIT)))),
+        ] {
+            let (client, requests) = fixture(vec![(code, body)]).await;
+            let error = client
+                .read(&format!("{MEMORY_ROOT}/note.md"))
+                .await
+                .err()
+                .unwrap();
+            assert!(!error.contains("fixture-key"));
+            if code == 402 {
+                assert!(error.contains("套餐"));
+            }
+            assert_eq!(requests.await.unwrap().len(), 1);
+        }
+    }
+    #[tokio::test]
+    async fn write_verification_failure_is_not_reported_as_no_write() {
+        let (client, requests) = fixture(vec![
+            (200, ok(json!("original"))),
+            (200, ok(json!({}))),
+            (503, json!({})),
+        ])
+        .await;
+        let error = client
+            .write(MemoryWrite {
+                uri: format!("{MEMORY_ROOT}/note.md"),
+                content: "edited".into(),
+                base_revision: revision("original"),
+            })
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("写入已提交"));
+        assert_eq!(requests.await.unwrap().len(), 3);
     }
 }

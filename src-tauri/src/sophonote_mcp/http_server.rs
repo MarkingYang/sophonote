@@ -107,7 +107,9 @@ fn bind_bridge_listener() -> Result<(TcpListener, u16), String> {
     match TcpListener::bind(("127.0.0.1", preferred)) {
         Ok(l) => Ok((l, preferred)),
         Err(e) => {
-            eprintln!("[sophonote-bridge] 绑定 127.0.0.1:{preferred} 失败（{e}），回退系统分配端口");
+            eprintln!(
+                "[sophonote-bridge] 绑定 127.0.0.1:{preferred} 失败（{e}），回退系统分配端口"
+            );
             let l = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind MCP: {e}"))?;
             let port = l
                 .local_addr()

@@ -234,12 +234,19 @@ async fn start_from_resource(
     // 仓库迭代（曾导致 sidecar 播种融合前旧协议、打分趟缺失落库步骤）。
     // 独立随 App 分发的新 Skill 优先于 Runtime seed，复用旧 Sidecar 打包时
     // 也必须携带新的客户端工作流；其他 Skill 继续由原 seed 提供。
-    let app_owned_skills = app.path().resource_dir().map_err(|error| error.to_string())?
+    let app_owned_skills = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?
         .join("sophonote-skills");
     #[cfg(debug_assertions)]
     let owned_override: Option<PathBuf> = {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skills/hermes/productivity");
-        Some(if repo.is_dir() { repo } else { app_owned_skills })
+        Some(if repo.is_dir() {
+            repo
+        } else {
+            app_owned_skills
+        })
     };
     #[cfg(not(debug_assertions))]
     let owned_override: Option<PathBuf> = Some(app_owned_skills);
@@ -323,7 +330,14 @@ async fn start_from_resource(
         .and_then(serde_json::Value::as_str)
         == Some("openviking")
     {
-        crate::commands::get_cached_api_key(app, crate::agent::openviking::KEYCHAIN_PROVIDER)?
+        // Memory is optional: a changed Debug signature can make Keychain
+        // require an explicit save. Keep Hermes available so the user can repair
+        // that credential in Settings; built-in memory remains disabled.
+        crate::commands::get_cached_api_key(app, crate::agent::openviking::KEYCHAIN_PROVIDER)
+            .unwrap_or_else(|_| {
+                eprintln!("[openviking] saved credential unavailable; cloud memory requires reauthorization in Settings");
+                String::new()
+            })
     } else {
         String::new()
     };
@@ -764,13 +778,12 @@ fn provider_environment(app: &AppHandle) -> Result<BTreeMap<String, String>, Str
             key = match crate::commands::get_cached_api_key(app, &provider) {
                 Ok(key) => key,
                 Err(error) => {
-                    // 未签名 Debug 二进制可能没有既有 Keychain ACL。不要让一次旧明文
-                    // 迁移失败阻断整个随包 Runtime；只读使用仍存在的旧值启动本轮，
-                    // 设置页继续保留明确错误，直到用户重新保存完成安全迁移。
+                    // 无关供应商授权失效不能阻塞整个 Runtime，也不能在启动时弹窗。
+                    // Debug 回退已在 get_cached_api_key 处理，Release 不绕过 Keychain。
                     eprintln!(
-                        "[hermes] provider={provider} Keychain unavailable; using retained legacy credential for this process: {error}"
+                        "[hermes] provider={provider} credential unavailable; skipped: {error}"
                     );
-                    crate::commands::get_legacy_api_key(app, &provider)?
+                    continue;
                 }
             };
         }
@@ -1189,7 +1202,9 @@ wait "$CHILD_PID" 2>/dev/null || true
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let descendant_pid = loop {
             if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
-                if value.trim().parse::<u32>().is_ok() { break value.trim().to_string(); }
+                if value.trim().parse::<u32>().is_ok() {
+                    break value.trim().to_string();
+                }
             }
             if std::time::Instant::now() >= deadline {
                 terminate_watchdog(&mut watchdog);

@@ -27,8 +27,10 @@ fn stub_bin() -> PathBuf {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("sophonote-hermes-h4-{tag}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "sophonote-hermes-h4-{tag}-{}",
+        uuid::Uuid::new_v4()
+    ));
     fs::create_dir_all(&dir).expect("temp");
     dir
 }

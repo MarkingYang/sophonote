@@ -84,30 +84,131 @@ pub fn project_list(app: AppHandle) -> ApiResponse<Vec<Project>> {
 
 /// 新建项目（与 db_insert_item 同范式：前端生成 uuid 与 createdAt）
 #[tauri::command]
-pub fn project_create(app: AppHandle, project: Project) -> ApiResponse<Project> {
-    let name = project.name.trim().to_string();
-    if name.is_empty() {
-        return ApiResponse::err("项目名称不能为空".to_string());
-    }
+pub fn project_create(
+    app: AppHandle,
+    project: Project,
+    workspace_root: Option<String>,
+) -> ApiResponse<Project> {
     let conn = match open(&app) {
         Ok(c) => c,
         Err(e) => return ApiResponse::err(e),
     };
-    match conn.execute(
+    match create_project_with_workspace(&conn, project, workspace_root.as_deref()) {
+        Ok(project) => ApiResponse::ok(project),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+
+fn create_project_with_workspace(
+    conn: &rusqlite::Connection,
+    project: Project,
+    workspace_root: Option<&str>,
+) -> Result<Project, String> {
+    let name = project.name.trim().to_string();
+    if name.is_empty() {
+        return Err("项目名称不能为空".into());
+    }
+    let binding = workspace_root
+        .map(|root| {
+            let root = crate::local_workspace::canonical_root(root)?;
+            Ok::<_, String>(
+                serde_json::json!({
+                    "version": 1,
+                    "root": root.to_string_lossy(),
+                    "name": root.file_name().unwrap_or_default().to_string_lossy(),
+                    "kind": if root.join(".git").exists() { "git" } else { "folder" },
+                    "permissionMode": "ask",
+                    "authorizedAt": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            )
+        })
+        .transpose()?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
         "INSERT INTO projects (id, name, description, parent_id, sort_order, created_at, updated_at)
          VALUES (?1, ?2, ?3, NULL, 0, ?4, NULL)",
         rusqlite::params![project.id, name, project.description, project.created_at],
-    ) {
-        Ok(_) => ApiResponse::ok(Project {
-            name,
-            doc_count: 0,
-            pinned: false,
-            parent_id: None,
-            updated_at: None,
-            ..project
-        }),
-        Err(e) => ApiResponse::err(e.to_string()),
+    ).map_err(|e| e.to_string())?;
+    if let Some(binding) = binding {
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            rusqlite::params![format!("ui:project-workspace:{}", project.id), binding],
+        )
+        .map_err(|e| e.to_string())?;
     }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(Project {
+        name,
+        doc_count: 0,
+        pinned: false,
+        parent_id: None,
+        updated_at: None,
+        ..project
+    })
+}
+
+/// 只改变后续任务范围，历史 Run 与引擎原生 Session 保持原样。
+#[tauri::command]
+pub fn project_assign_thread(
+    app: AppHandle,
+    thread_id: String,
+    project_id: Option<String>,
+) -> ApiResponse<()> {
+    let mut conn = match open(&app) {
+        Ok(c) => c,
+        Err(e) => return ApiResponse::err(e),
+    };
+    match assign_thread(&mut conn, &thread_id, project_id.as_deref()) {
+        Ok(()) => ApiResponse::ok(()),
+        Err(error) => ApiResponse::err(error),
+    }
+}
+
+fn assign_thread(
+    conn: &mut rusqlite::Connection,
+    thread_id: &str,
+    project_id: Option<&str>,
+) -> Result<(), String> {
+    let project_id = project_id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "任务必须归属项目，请选择目标项目".to_string())?;
+    // 与 Run claim 的写事务互斥，避免检查后另一个 Run 插入。
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let running: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE thread_id=?1 AND lower(trim(status,'\"')) IN ('queued','running','waiting_approval'))",
+        [thread_id], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    if running {
+        return Err("任务仍在执行或等待审批，请结束后再移动".into());
+    }
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Err("目标项目不存在".into());
+    }
+    let changed = tx
+        .execute(
+            "UPDATE agent_threads SET project_id=?1, collection_id=NULL WHERE id=?2",
+            rusqlite::params![project_id, thread_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("任务不存在".into());
+    }
+    tx.execute(
+        "DELETE FROM settings WHERE key=?1",
+        [format!("ui:thread-workspace:{thread_id}")],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 /// 重命名项目
@@ -321,6 +422,130 @@ pub fn project_remove_document(app: AppHandle, article_id: String) -> ApiRespons
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_project() -> Project {
+        Project {
+            id: "project-fixture".into(),
+            name: "  项目测试  ".into(),
+            description: None,
+            parent_id: None,
+            doc_count: 0,
+            pinned: false,
+            created_at: "2026-09-18".into(),
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn project_and_local_folder_are_created_atomically() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        let root = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let project =
+            create_project_with_workspace(&conn, fixture_project(), root.to_str()).unwrap();
+        assert_eq!(project.name, "项目测试");
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='ui:project-workspace:project-fixture'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let binding: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(binding["root"], root.to_string_lossy().as_ref());
+        assert_eq!(binding["permissionMode"], "ask");
+        assert_eq!(binding["version"], 1);
+    }
+
+    #[test]
+    fn invalid_folder_or_binding_write_failure_leaves_no_project() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        assert!(
+            create_project_with_workspace(&conn, fixture_project(), Some("relative/path")).is_err()
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM projects WHERE id=?1",
+                "project-fixture"
+            ),
+            0
+        );
+        conn.execute("INSERT INTO settings(key,value) VALUES ('ui:project-workspace:project-fixture','existing')", []).unwrap();
+        let root = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
+        assert!(create_project_with_workspace(&conn, fixture_project(), root.to_str()).is_err());
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM projects WHERE id=?1",
+                "project-fixture"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn moving_task_rejects_live_runs_and_preserves_native_history() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO projects(id,name) VALUES ('p1','一'),('p2','二');
+            INSERT INTO agent_threads(id,title,status,project_id,created_at,updated_at,external_session_id) VALUES ('t','任务','idle','p1',1,1,'native:original');
+            INSERT INTO agent_runs(id,thread_id,project_id,status,provider,model,created_at,updated_at) VALUES ('r','t','p1','running','p','m',1,1);
+            INSERT INTO settings(key,value) VALUES ('ui:thread-workspace:t','old-folder');").unwrap();
+        for status in [
+            "queued",
+            "running",
+            "waiting_approval",
+            "\"waiting_approval\"",
+        ] {
+            conn.execute("UPDATE agent_runs SET status=?1", [status])
+                .unwrap();
+            assert!(assign_thread(&mut conn, "t", Some("p2")).is_err());
+        }
+        conn.execute("UPDATE agent_runs SET status='completed'", [])
+            .unwrap();
+        assert!(assign_thread(&mut conn, "t", Some("missing")).is_err());
+        assign_thread(&mut conn, "t", Some("p2")).unwrap();
+        let pair: (String, String) = conn
+            .query_row(
+                "SELECT project_id,external_session_id FROM agent_threads WHERE id='t'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(pair, ("p2".into(), "native:original".into()));
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM agent_runs WHERE project_id=?1",
+                "p1"
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT count(*) FROM settings WHERE key=?1",
+                "ui:thread-workspace:t"
+            ),
+            0
+        );
+        for target in [None, Some(""), Some(" ")] {
+            assert_eq!(
+                assign_thread(&mut conn, "t", target).unwrap_err(),
+                "任务必须归属项目，请选择目标项目"
+            );
+        }
+        let project: String = conn
+            .query_row(
+                "SELECT project_id FROM agent_threads WHERE id='t'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(project, "p2");
+    }
 
     fn count(conn: &rusqlite::Connection, sql: &str, id: &str) -> i64 {
         conn.query_row(sql, rusqlite::params![id], |row| row.get(0))

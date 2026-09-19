@@ -1,7 +1,7 @@
 {
   "name": "sophonote",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.0-preview.9",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -21,7 +21,8 @@
     "release:windows": "sh scripts/release-windows.sh",
     "install:macos": "sh scripts/install-macos.sh",
     "release:verify": "sh scripts/verify-release.sh",
-    "release:verify-clean": "sh scripts/verify-clean-machine.sh"
+    "release:verify-clean": "sh scripts/verify-clean-machine.sh",
+    "opencode:bundle": "python3 scripts/build-opencode-sidecar.py"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

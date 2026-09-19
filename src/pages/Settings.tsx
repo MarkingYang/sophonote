@@ -1,6 +1,7 @@
+import { confirmDiscard } from '../services/confirmDiscard';
+import OpenCodeRuntimeCard from '../components/features/OpenCodeRuntimeCard';
 import { useEffect, useRef, useState } from 'react';
 import AgentRuntimeUpdateCard from '../components/features/AgentRuntimeUpdateCard';
-import OpenVikingSettingsPanel from '../components/features/OpenVikingSettingsPanel';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { useAppStore } from '../stores/appStore';
 import {
@@ -156,7 +157,7 @@ function OpenRouterCredentialCard() {
       .then((exists) => { if (!cancelled) setConfigured(exists); })
       .catch((error) => {
         if (cancelled) return;
-        setConfigured(false);
+        setConfigured(null);
         setSaveState('error');
         setMessage(error instanceof Error ? error.message : '读取 OpenRouter 凭据状态失败');
       });
@@ -343,7 +344,8 @@ function DiscoveryPolicyEditor({ source }: { source: Source }) {
 
 export default function Settings() {
   const { settings, updateSettings, sources, toggleSource, updateSourceInterval, updateSourceTier, updateSourceAdmission, loadSources, setSelectedItemId, stats } = useAppStore();
-  const [activeTab, setActiveTab] = useState<'ai' | 'capabilities' | 'usage' | 'sources' | 'inbox' | 'storage' | 'runtime' | 'openviking' | 'general'>('ai');
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  const [activeTab, setActiveTab] = useState<'ai' | 'capabilities' | 'usage' | 'sources' | 'inbox' | 'storage' | 'runtime' | 'general'>('ai');
   const [settingsNavWidth, setSettingsNavWidth] = useState(192);
   useEffect(() => {
     getSetting(SETTINGS_NAV_WIDTH_KEY)
@@ -520,7 +522,6 @@ export default function Settings() {
         <div className="flex-1 overflow-y-auto p-3">
         {[
           { id: 'ai' as const, label: 'AI 配置', icon: Key },
-          { id: 'openviking' as const, label: 'OpenViking', icon: Database },
           { id: 'capabilities' as const, label: '能力配置', icon: Boxes },
           { id: 'usage' as const, label: '用量统计', icon: BarChart3 },
           { id: 'sources' as const, label: '数据源', icon: Database },
@@ -532,7 +533,7 @@ export default function Settings() {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={async () => { if (activeTab === item.id || !memoryDirty || await confirmDiscard('记忆有未保存修改，放弃修改并切换？')) setActiveTab(item.id); }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-left ${
                 activeTab === item.id
                   ? 'bg-[var(--accent-subtle)] text-[var(--accent)] font-semibold'
@@ -566,7 +567,7 @@ export default function Settings() {
       <div className="flex-1 flex flex-col min-w-0">
         <div className="h-10 border-b border-[var(--border-default)] flex items-center justify-between gap-3 px-5 shrink-0 bg-[var(--bg-surface)]" data-tauri-drag-region>
           <h2 className="text-sm font-semibold text-[var(--text-primary)]" data-tauri-drag-region>
-            {activeTab === 'openviking' ? 'OpenViking' : activeTab === 'ai' ? 'AI 配置' : activeTab === 'capabilities' ? '能力配置' : activeTab === 'usage' ? '用量统计' : activeTab === 'sources' ? '数据源' : activeTab === 'inbox' ? '收件箱' : activeTab === 'storage' ? '存储' : activeTab === 'runtime' ? 'Agent 配置更新' : '通用设置'}
+            {activeTab === 'ai' ? 'AI 配置' : activeTab === 'capabilities' ? '能力配置' : activeTab === 'usage' ? '用量统计' : activeTab === 'sources' ? '数据源' : activeTab === 'inbox' ? '收件箱' : activeTab === 'storage' ? '存储' : activeTab === 'runtime' ? 'Agent 配置更新' : '通用设置'}
           </h2>
           {activeTab === 'sources' && (
             <button
@@ -581,8 +582,7 @@ export default function Settings() {
           )}
         </div>
         <div className="flex-1 overflow-y-auto p-8">
-        {activeTab === 'ai' && <AIProviderSettingsPanel />}
-        {activeTab === 'openviking' && <OpenVikingSettingsPanel />}
+        {activeTab === 'ai' && <AIProviderSettingsPanel onMemoryDirtyChange={setMemoryDirty} />}
         {activeTab === 'capabilities' && <CapabilitySettingsPanel />}
         {activeTab === 'usage' && <UsageStatisticsPanel />}
 
@@ -1052,6 +1052,7 @@ export default function Settings() {
             </p>
             <AgentRuntimeUpdateCard engine="pi" />
             <AgentRuntimeUpdateCard engine="claude_code" />
+            <OpenCodeRuntimeCard />
           </div>
         )}
 

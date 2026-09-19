@@ -79,6 +79,20 @@ pub fn configure_sophonote_surface(
     let root_object = root
         .as_object_mut()
         .ok_or("config.yaml root 不是 mapping")?;
+    // Long-term memory is cloud-only; never read/write the legacy local stores.
+    // Keep their files for the user, and do not silently activate a cloud provider.
+    let memory = object_entry(root_object, "memory")?;
+    memory.insert("memory_enabled".into(), Value::Bool(false));
+    memory.insert("user_profile_enabled".into(), Value::Bool(false));
+    if memory.get("provider").and_then(Value::as_str) == Some("openviking")
+        && memory
+            .get("openviking")
+            .and_then(|v| v.get("endpoint"))
+            .and_then(Value::as_str)
+            != Some(crate::agent::openviking::DEFAULT_ENDPOINT)
+    {
+        memory.insert("provider".into(), Value::String(String::new()));
+    }
     let auxiliary = object_entry(root_object, "auxiliary")?;
     let title_generation = object_entry(auxiliary, "title_generation")?;
     title_generation.insert("enabled".to_string(), Value::Bool(false));
@@ -444,6 +458,15 @@ mod tests {
         assert!(raw.contains("sophonote-bridge"));
         assert!(raw.contains("title_generation"));
         assert!(raw.contains("enabled: false"));
+        let config: Value = serde_yaml::from_str(&raw).unwrap();
+        assert_eq!(
+            config.pointer("/memory/memory_enabled"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            config.pointer("/memory/user_profile_enabled"),
+            Some(&Value::Bool(false))
+        );
         assert!(raw.contains("workspace"));
         std::env::remove_var(ENV_HERMES_HOME);
         let _ = fs::remove_dir_all(&dir);

@@ -115,7 +115,7 @@ export function ComputerUsePanel({ enabled, supported, locked = false, running =
     try {
       await hermesToolsetSetEnabled('computer_use', !enabled);
       if (alive.current) {
-        setNotice(enabled ? '已关闭新会话的电脑工具。已有会话请停止后新建。' : '电脑工具已启用。已有会话请新建后使用，以保留原会话历史。');
+        setNotice(enabled ? '已关闭新任务的电脑工具。已有任务请停止后新建。' : '电脑工具已启用。已有任务请新建后使用，以保留原任务历史。');
         onRefresh();
       }
     } catch (reason) { if (alive.current) setError(String(reason)); }
@@ -131,7 +131,7 @@ export function ComputerUsePanel({ enabled, supported, locked = false, running =
         {onClose && <button aria-label="关闭电脑操作" onClick={onClose} className="text-[var(--text-tertiary)]"><X size={16} /></button>}
       </header>
       <div className="space-y-4 overflow-y-auto p-4 text-xs text-[var(--text-secondary)]">
-        <p className="leading-relaxed">读取你指定的应用窗口，按指令操作电脑，并将结果整理到会话或当前笔记。</p>
+        <p className="leading-relaxed">读取你指定的应用窗口，按指令操作电脑，并将结果整理到任务或当前笔记。</p>
         <div className="rounded-xl bg-[var(--bg-sunken)] p-3">
           <div className="flex items-center gap-2"><span className="flex-1 font-medium" role="status">{busy ? '正在检测或配置…' : computerReadiness(status)}</span><button aria-label="重新检测电脑操作" disabled={busy || !!pending} onClick={() => void refresh()}><RefreshCw size={13} /></button></div>
           {status?.embedded && <p className="mt-2">组件已随应用提供，系统权限归属：{status.permissionOwner || '待验证'}。</p>}
@@ -146,15 +146,15 @@ export function ComputerUsePanel({ enabled, supported, locked = false, running =
           {status && !status.embedded && !status.installed && status.platformSupported && <button className={buttonClass} disabled={busy || !!pending || locked} onClick={() => void start('install')}>安装电脑驱动</button>}
           {status?.installed && status.canGrant && status.ready !== true && <button className={buttonClass} disabled={busy || !!pending || locked} onClick={() => void start('grant')}>前往系统授权</button>}
           <button className={buttonClass} disabled={busy || !!pending || locked || !supported || (!enabled && status?.ready !== true)} onClick={() => void toggle()}>{enabled ? '关闭电脑工具' : '启用电脑工具'}</button>
-          {hasSession && onNewSession && <button className={buttonClass} disabled={locked || busy || !!pending} onClick={() => void onNewSession().catch((reason) => setError(String(reason)))}>新建会话使用</button>}
+          {hasSession && onNewSession && <button className={buttonClass} disabled={locked || busy || !!pending} onClick={() => void onNewSession().catch((reason) => setError(String(reason)))}>新建任务使用</button>}
         </div>
-        {hasSession && <p className="text-[var(--text-tertiary)]">首次安装或启用后请新建会话，原会话历史会保留。关闭工具也只对新会话生效。</p>}
+        {hasSession && <p className="text-[var(--text-tertiary)]">首次安装或启用后请新建任务，原任务历史会保留。关闭工具也只对新任务生效。</p>}
         {onPrepare && <div className="space-y-2 border-t border-[var(--border-default)] pt-4">
           <label htmlFor="computer-use-target" className="block font-medium">目标应用或窗口</label>
           <input id="computer-use-target" value={target} onChange={(event) => setTarget(event.target.value)} maxLength={200} placeholder="例如：预览中的项目方案.pdf" disabled={locked} className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2 outline-none focus:border-[var(--accent-border)]" />
-          <button className={buttonClass} disabled={!ready || locked || !target.trim() || !skillAvailable} onClick={() => onPrepare(`读取「${target.trim()}」窗口的内容，先确认目标再操作，整理要点${hasNote ? '并追加到当前笔记，生成待审阅修改' : '并在当前会话中回答'}。`)}>准备整理{hasNote ? '到当前笔记' : '到会话'}</button>
+          <button className={buttonClass} disabled={!ready || locked || !target.trim() || !skillAvailable} onClick={() => onPrepare(`读取「${target.trim()}」窗口的内容，先确认目标再操作，整理要点${hasNote ? '并追加到当前笔记，生成待审阅修改' : '并在当前任务中回答'}。`)}>准备整理{hasNote ? '到当前笔记' : '到任务'}</button>
           {!skillAvailable && <p className="text-[var(--warning)]">笔记整理 Skill 尚未加载，请刷新 Hermes 能力或重启应用。</p>}
-          <p className="text-[var(--text-tertiary)]">任务会填入输入框，你可以修改后发送。动作与审批显示在会话过程里。</p>
+          <p className="text-[var(--text-tertiary)]">任务会填入输入框，你可以修改后发送。动作与审批显示在任务过程里。</p>
         </div>}
         {running && onStop && <button className="w-full rounded-lg bg-[var(--danger-subtle)] px-3 py-2 font-medium text-[var(--danger)] disabled:opacity-40" disabled={stopping} onClick={async () => {
           setStopping(true); setError(null);

@@ -23,7 +23,11 @@ use crate::agent::types::{
 /// 占位标题：空会话 / 新建默认，不可进入历史列表展示
 pub fn is_placeholder_thread_title(title: &str) -> bool {
     let t = title.trim();
-    t.is_empty() || matches!(t, "新会话" | "新对话" | "未命名会话")
+    t.is_empty()
+        || matches!(
+            t,
+            "新会话" | "新对话" | "未命名会话" | "新任务" | "未命名任务"
+        )
 }
 
 fn collapse_ws(s: &str) -> String {
@@ -257,7 +261,7 @@ impl RunStore {
                      WHERE m.thread_id = agent_threads.id AND m.role = 'user' \
                        AND length(trim(m.content)) > 0) \
                  AND length(trim(title)) > 0 \
-                 AND trim(title) NOT IN ('新会话', '新对话', '未命名会话')"
+                 AND trim(title) NOT IN ('新会话', '新对话', '未命名会话', '新任务', '未命名任务')"
             }
         };
         let sql = match project_id {
@@ -290,7 +294,10 @@ impl RunStore {
         let has_user = msgs
             .iter()
             .any(|m| m.role == "user" && !m.content.trim().is_empty());
-        let sidecar_history = self.get_thread(id)?.is_some_and(|t| matches!(t.engine.as_str(), "pi" | "claude_code") && t.latest_run_id.is_some());
+        let sidecar_history = self.get_thread(id)?.is_some_and(|t| {
+            matches!(t.engine.as_str(), "pi" | "claude_code" | "opencode")
+                && t.latest_run_id.is_some()
+        });
         if !has_user && !sidecar_history {
             self.delete_thread(id)?;
             return Ok(false);
@@ -606,21 +613,35 @@ impl RunStore {
 
     /// Atomically serialize engine binding and Run creation across sidecar adapters.
     pub fn with_run_claim(
-        &self, thread_id: &str, engine: &str,
+        &self,
+        thread_id: &str,
+        engine: &str,
         create: impl FnOnce() -> Result<(), RunStoreError>,
     ) -> Result<(), RunStoreError> {
         let tx = self.conn.unchecked_transaction()?;
         // Acquire the write lock before inspecting the binding or active Runs.
-        tx.execute("UPDATE agent_threads SET engine=engine WHERE id=?1", [thread_id])?;
-        let thread = self.get_thread(thread_id)?.ok_or_else(|| RunStoreError::Generic("会话不存在".into()))?;
+        tx.execute(
+            "UPDATE agent_threads SET engine=engine WHERE id=?1",
+            [thread_id],
+        )?;
+        let thread = self
+            .get_thread(thread_id)?
+            .ok_or_else(|| RunStoreError::Generic("会话不存在".into()))?;
         if thread.latest_run_id.is_some() && thread.engine != engine {
             return Err(RunStoreError::Generic("已有会话不能切换引擎".into()));
         }
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE thread_id=?1 AND lower(trim(status,'\"')) IN ('queued','running','waiting_approval'))",
             [thread_id], |row| row.get(0))?;
-        if active { return Err(RunStoreError::Generic("此会话上一轮尚未结束或需要恢复".into())); }
-        tx.execute("UPDATE agent_threads SET engine=?1 WHERE id=?2", rusqlite::params![engine,thread_id])?;
+        if active {
+            return Err(RunStoreError::Generic(
+                "此会话上一轮尚未结束或需要恢复".into(),
+            ));
+        }
+        tx.execute(
+            "UPDATE agent_threads SET engine=?1 WHERE id=?2",
+            rusqlite::params![engine, thread_id],
+        )?;
         create()?;
         tx.commit()?;
         Ok(())
@@ -1379,11 +1400,17 @@ mod tests {
         store.with_run_claim("bound", "pi", create).unwrap();
         assert_eq!(store.get_thread("bound").unwrap().unwrap().engine, "pi");
         assert!(store.with_run_claim("bound", "pi", || Ok(())).is_err());
-        store.update_run_status("first", &RunStatus::Completed, 3).unwrap();
+        store
+            .update_run_status("first", &RunStatus::Completed, 3)
+            .unwrap();
         assert!(store.with_run_claim("bound", "hermes", || Ok(())).is_err());
         assert!(store.close_thread("bound", 4).unwrap()); // Attachment-only Pi history is retained.
         store.create_thread("draft", "", None, 1).unwrap();
-        assert!(store.with_run_claim("draft", "pi", || Err(RunStoreError::Generic("fixture".into()))).is_err());
+        assert!(store
+            .with_run_claim("draft", "pi", || Err(RunStoreError::Generic(
+                "fixture".into()
+            )))
+            .is_err());
         assert_eq!(store.get_thread("draft").unwrap().unwrap().engine, "hermes");
     }
 
@@ -2612,7 +2639,8 @@ mod transport_tests {
     /// 不静默吞错，也不无限重试卡死事件循环
     #[test]
     fn run_store_transport_retry_exhaustion_errors() {
-        let transport = RunStoreTransport::with_max_attempts("/nonexistent-dir-ag20/sophonote.db", 2);
+        let transport =
+            RunStoreTransport::with_max_attempts("/nonexistent-dir-ag20/sophonote.db", 2);
         let err = transport.send(make_test_event("r-retry", 1)).unwrap_err();
         assert!(err.contains("RunStore 写入失败"), "实际: {err}");
         assert!(err.contains("已尝试 2 次"), "实际: {err}");

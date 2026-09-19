@@ -33,6 +33,7 @@ pub mod engine_select;
 pub mod hermes;
 
 // Tauri 命令 + Rig 驱动循环（Rig 类型扩散面收敛在 adapters / run_controller）
+pub mod capabilities;
 pub mod commands;
 pub mod run_controller;
 
@@ -64,3 +65,5 @@ pub mod pi;
 pub mod claude;
 
 pub mod runtime_updates;
+
+pub mod opencode;

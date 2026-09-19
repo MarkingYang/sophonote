@@ -11,12 +11,12 @@ use tokio_util::sync::CancellationToken;
 use sophonote_lib::agent::engine::{AgentEngine, RigAgentEngine, RunEnvelope};
 use sophonote_lib::agent::hermes::{file_sha256_hex, HermesReadonlyEngine, HermesSidecarConfig};
 use sophonote_lib::agent::run_controller::SpikeParams;
-use sophonote_lib::sophonote_mcp::{
-    bridge_patch_registry, issue_lease, BridgeInvokeRequest, LeaseRegistry, SophonoteBridge,
-    ModelRoute, BRIDGE_PATCH_TOOL,
-};
 use sophonote_lib::model::gateway::ModelGateway;
 use sophonote_lib::model::messages::{FinishReason, ModelError, ModelRequest, ModelResponse};
+use sophonote_lib::sophonote_mcp::{
+    bridge_patch_registry, issue_lease, BridgeInvokeRequest, LeaseRegistry, ModelRoute,
+    SophonoteBridge, BRIDGE_PATCH_TOOL,
+};
 use sophonote_lib::tools::builtin::spike_registry;
 use sophonote_lib::tools::project::{ListProjectDocumentsTool, ReadDocumentTool};
 use sophonote_lib::tools::ToolRegistry;
@@ -26,8 +26,10 @@ fn stub_bin() -> PathBuf {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("sophonote-hermes-h7-{tag}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "sophonote-hermes-h7-{tag}-{}",
+        uuid::Uuid::new_v4()
+    ));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

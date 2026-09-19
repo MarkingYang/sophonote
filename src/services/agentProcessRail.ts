@@ -121,10 +121,16 @@ export function toolDisplayName(name: string): string {
       return '搜索代码';
     case 'terminal':
       return '执行命令';
+    case 'skill_view':
+      return '查看技能';
+    case 'skill_manage':
+      return '管理技能';
+    case 'execute_code':
+      return '执行代码';
     case 'process':
       return '管理后台进程';
     default:
-      return bare || name;
+      return '调用工具';
   }
 }
 

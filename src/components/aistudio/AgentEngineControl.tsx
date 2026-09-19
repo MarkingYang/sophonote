@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import type { AgentEngine } from '../../stores/agentStore';
 
-const engines = [{ id: 'hermes', label: 'Hermes' }, { id: 'pi', label: 'Pi' }, { id: 'claude_code', label: 'Claude Code' }] as const;
+const engines = [{ id: 'hermes', label: 'Hermes' }, { id: 'pi', label: 'Pi' }, { id: 'claude_code', label: 'Claude Code' }, { id: 'opencode', label: 'OpenCode' }] as const;
 
 export function AgentEngineControl({ value, disabled, onSelect }: {
   value: AgentEngine;

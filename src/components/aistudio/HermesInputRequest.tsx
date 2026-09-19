@@ -29,8 +29,8 @@ function approvalChoiceMeta(choice: string): ApprovalChoiceMeta {
   }
   if (choice === 'session') {
     return {
-      label: '本会话允许',
-      description: '当前会话内的同类操作不再重复询问。',
+      label: '本任务允许',
+      description: '当前任务内的同类操作不再重复询问。',
       tone: 'default',
     };
   }
@@ -140,13 +140,15 @@ function DecisionOption({
   );
 }
 
-/** Hermes 阻塞式输入卡：回答直接回到同一 Session，不转换成下一轮用户消息。 */
+/** 多引擎共用的阻塞式输入卡：回答直接回到同一 Session，不转换成下一轮用户消息。 */
 export function HermesInputRequest({
   request,
+  engineLabel,
   onApproval,
   onClarify,
 }: {
   request: PendingHermesInput;
+  engineLabel: string;
   onApproval: (choice: string) => Promise<boolean>;
   onClarify: (requestId: string, answer: string) => Promise<boolean>;
 }) {
@@ -196,7 +198,7 @@ export function HermesInputRequest({
   if (resolved) {
     return (
       <div className="mb-2 rounded-lg border border-[var(--success)] bg-[var(--success-subtle)] px-3 py-2 text-xs text-[var(--success)]" role="status">
-        已提交给 Hermes，Agent 正在继续执行。
+        已提交给 {engineLabel}，正在等待后续进展。
       </div>
     );
   }
@@ -214,7 +216,7 @@ export function HermesInputRequest({
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" aria-hidden="true" />
           <div className="min-w-0">
             <p id={titleId} className="text-[12px] font-semibold leading-5 text-[var(--text-primary)]">
-              Hermes 正在等待授权
+              {engineLabel} 正在等待授权
             </p>
             <p className="font-mono text-xs leading-4 text-[var(--text-secondary)]">{payload.toolName}</p>
           </div>
@@ -272,7 +274,7 @@ export function HermesInputRequest({
         )}
         {submitError && (
           <p className="px-3 pb-2.5 text-xs text-[var(--danger)]" role="alert">
-            提交失败，请检查 Hermes 连接后重试。
+            提交失败，请检查 {engineLabel} 连接后重试。
           </p>
         )}
       </section>
@@ -289,7 +291,7 @@ export function HermesInputRequest({
     >
       <div className="border-b border-[var(--accent-border)] bg-[var(--accent-subtle)] px-3 py-2.5">
         <p id={titleId} className="text-[12px] font-semibold leading-5 text-[var(--text-primary)]">
-          Hermes 需要你的决定
+          {engineLabel} 需要你的决定
         </p>
         <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">{payload.question}</p>
       </div>
@@ -341,7 +343,7 @@ export function HermesInputRequest({
       </div>
       {submitError && (
         <p className="px-3 pb-2.5 text-xs text-[var(--danger)]" role="alert">
-          提交失败，请检查 Hermes 连接后重试。
+          提交失败，请检查 {engineLabel} 连接后重试。
         </p>
       )}
     </section>

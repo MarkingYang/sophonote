@@ -1265,10 +1265,8 @@ pub async fn hermes_sidecar_pull(
 
 // ==================== 钥匙串（API Key 安全存储） ====================
 
-const KEYCHAIN_SERVICE: &str = "com.fei.sophonote";
-
-// 进程级 Key 缓存：每个进程每个 provider 只触发一次钥匙串授权弹窗。
-// dev 模式二进制每次重编译签名都变，弹窗不可避免，缓存把影响压到每进程一次。
+// 进程级 Key 缓存：成功读取后复用；权限错误不缓存为不存在。
+// 普通读取一律静默，只有显式保存允许系统授权。
 static KEY_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::OnceLock::new();
 
@@ -1331,15 +1329,11 @@ pub fn get_cached_api_key(app: &AppHandle, provider: &str) -> Result<String, Str
         }
     }
 
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider)
-        .map_err(|error| format!("初始化 Keychain 失败: {error}"))?;
-    match entry.get_password() {
-        Ok(key) if !key.is_empty() => {
+    if let Some(key) = crate::credentials::read(provider)? {
+        if !key.is_empty() {
             set_cached_api_key(provider, &key);
             return Ok(key);
         }
-        Ok(_) | Err(keyring::Error::NoEntry) => {}
-        Err(error) => return Err(format!("读取 Keychain 失败: {error}")),
     }
 
     // Release 中 OpenRouter 排名凭据始终 Keychain-only；Debug 开发回退已在上方读取。
@@ -1356,24 +1350,17 @@ pub fn get_cached_api_key(app: &AppHandle, provider: &str) -> Result<String, Str
         return Ok(String::new());
     }
 
-    entry
-        .set_password(&legacy_key)
-        .map_err(|error| format!("迁移写入 Keychain 失败，旧明文已保留: {error}"))?;
-    let verified = entry
-        .get_password()
-        .map_err(|error| format!("迁移回读 Keychain 失败，旧明文已保留: {error}"))?;
-    if verified != legacy_key {
-        return Err("迁移回读 Keychain 不一致，旧明文已保留".into());
-    }
+    crate::credentials::save(provider, &legacy_key, false)
+        .map_err(|error| format!("迁移 Keychain 失败，旧明文已保留: {error}"))?;
     let conn = rusqlite::Connection::open(get_db_path(app)).map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM settings WHERE key = ?1",
         rusqlite::params![settings_key],
     )
     .map_err(|error| format!("Keychain 已写入，但删除旧明文失败: {error}"))?;
-    set_cached_api_key(provider, &verified);
+    set_cached_api_key(provider, &legacy_key);
     eprintln!("[keychain] provider={provider} legacy credential migrated");
-    Ok(verified)
+    Ok(legacy_key)
 }
 
 #[tauri::command]
@@ -1386,17 +1373,7 @@ pub async fn keychain_save_api_key(
         return keychain_delete_api_key(app, provider).await;
     }
     let keychain_result = (|| -> Result<(), String> {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &provider)
-            .map_err(|error| format!("初始化 Keychain 失败: {error}"))?;
-        entry
-            .set_password(&api_key)
-            .map_err(|error| format!("写入 Keychain 失败: {error}"))?;
-        let verified = entry
-            .get_password()
-            .map_err(|error| format!("回读 Keychain 失败: {error}"))?;
-        if verified != api_key {
-            return Err("Keychain 回读不一致".into());
-        }
+        crate::credentials::save(&provider, &api_key, true)?;
         let conn = rusqlite::Connection::open(get_db_path(&app)).map_err(|e| e.to_string())?;
         conn.execute(
             "DELETE FROM settings WHERE key = ?1",
@@ -1450,34 +1427,59 @@ pub async fn keychain_save_api_key(
     }
 }
 
+/// 配置展示只查存在性：不解密、不迁移、不触发授权。
+pub(crate) fn has_api_key(app: &AppHandle, provider: &str) -> Result<bool, String> {
+    if let Some(key) = key_cache().lock().map_err(|e| e.to_string())?.get(provider) {
+        return Ok(!key.is_empty());
+    }
+    // 旧值只查有无，不读取内容；真正使用时仍走安全迁移/Debug 策略。
+    let conn = rusqlite::Connection::open(get_db_path(app)).map_err(|e| e.to_string())?;
+    let legacy_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key = ?1 AND length(value) > 0)",
+            rusqlite::params![format!("apikey:{provider}")],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if legacy_exists
+        && (cfg!(debug_assertions) || provider != crate::openrouter_rankings::KEYCHAIN_PROVIDER)
+    {
+        return Ok(true);
+    }
+    crate::credentials::contains(provider)
+}
+
 #[tauri::command]
-pub fn keychain_get_api_key(app: AppHandle, provider: String) -> ApiResponse<String> {
-    match get_cached_api_key(&app, &provider) {
-        // Never return an existing secret across IPC into the WebView. The UI
-        // only needs configured/not-configured; model calls read Keychain in Rust.
-        Ok(key) if !key.is_empty() => ApiResponse::ok("configured".to_string()),
-        Ok(_) => ApiResponse::err("not_found".to_string()),
-        Err(e) => ApiResponse::err(e),
+pub async fn keychain_get_api_key(app: AppHandle, provider: String) -> ApiResponse<String> {
+    // System credential calls must never block the WebView event loop.
+    match tauri::async_runtime::spawn_blocking(move || has_api_key(&app, &provider)).await {
+        Ok(Ok(true)) => ApiResponse::ok("configured".to_string()),
+        Ok(Ok(false)) => ApiResponse::err("not_found".to_string()),
+        Ok(Err(error)) => ApiResponse::err(error),
+        Err(error) => ApiResponse::err(error.to_string()),
     }
 }
 
 #[tauri::command]
 pub async fn keychain_delete_api_key(app: AppHandle, provider: String) -> ApiResponse<String> {
-    if let Ok(conn) = rusqlite::Connection::open(get_db_path(&app)) {
-        let _ = conn.execute(
+    // 先成功删除安全存储，再删旧值和缓存；权限失败不能丢失可恢复来源。
+    if let Err(error) = crate::credentials::delete(&provider) {
+        return ApiResponse::err(error);
+    }
+    let result = (|| -> Result<(), String> {
+        let conn = rusqlite::Connection::open(get_db_path(&app)).map_err(|e| e.to_string())?;
+        conn.execute(
             "DELETE FROM settings WHERE key = ?1",
             rusqlite::params![format!("apikey:{}", provider)],
-        );
-    }
-    // 顺手清理钥匙串里的历史残留（不弹窗：删除不存在条目时静默处理）
-    if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, &provider) {
-        if let Err(error) = entry.delete_credential() {
-            if !matches!(error, keyring::Error::NoEntry) {
-                return ApiResponse::err(format!("删除 Keychain 失败: {error}"));
-            }
-        }
-    }
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    // Keychain 删除成功后即失效缓存，SQLite 清理失败另行报错。
     let _ = key_cache().lock().map(|mut c| c.remove(&provider));
+    if let Err(error) = result {
+        return ApiResponse::err(error);
+    }
     match crate::restart_bundled_hermes(&app).await {
         Ok(()) => ApiResponse::ok("deleted".to_string()),
         Err(error) => {

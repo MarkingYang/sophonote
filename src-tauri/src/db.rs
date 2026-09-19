@@ -913,8 +913,17 @@ mod tests {
         conn.execute_batch("CREATE TABLE agent_threads (id TEXT PRIMARY KEY,title TEXT,status TEXT,project_id TEXT,latest_run_id TEXT,external_session_id TEXT,created_at INTEGER,updated_at INTEGER); INSERT INTO agent_threads VALUES ('legacy','保留标题','completed',NULL,'run','native-session',1,2);").unwrap();
         create_schema(&conn).unwrap();
         create_schema(&conn).unwrap();
-        let row: (String,String,String) = conn.query_row("SELECT engine,title,external_session_id FROM agent_threads WHERE id='legacy'",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
-        assert_eq!(row,("hermes".into(),"保留标题".into(),"native-session".into()));
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT engine,title,external_session_id FROM agent_threads WHERE id='legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("hermes".into(), "保留标题".into(), "native-session".into())
+        );
     }
 
     #[test]

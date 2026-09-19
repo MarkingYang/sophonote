@@ -68,3 +68,6 @@ src-tauri/resources/computer-use/
 
 # Generated pinned Pi standalone distributions
 src-tauri/resources/pi/
+
+# Generated pinned OpenCode standalone distributions
+src-tauri/resources/opencode/

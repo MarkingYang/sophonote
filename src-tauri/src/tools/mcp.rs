@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use tauri::{AppHandle, Manager};
 
 use crate::commands::ApiResponse;
-use crate::tools::{SophoNoteTool, ProvenanceRef, ToolDescriptor, ToolError, ToolOutput};
+use crate::tools::{ProvenanceRef, SophoNoteTool, ToolDescriptor, ToolError, ToolOutput};
 
 /// MCP 连接（子进程拉起 + initialize 握手 + tools/list）总超时（docs/architecture.md「启动超时」）
 pub const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);

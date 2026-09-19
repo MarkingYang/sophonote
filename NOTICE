@@ -22,6 +22,14 @@ Pi Coding Agent
   `pnpm pi:bundle`. Its license is retained in scripts/assets/LICENSE.pi
   and the packaged Pi resources.
 
+OpenCode
+  Copyright (c) 2025 opencode
+  License: MIT
+  Source: https://github.com/anomalyco/opencode
+  SophoNote bundles official pinned 1.18.31 via `pnpm opencode:bundle`.
+  Its license is retained in scripts/assets/LICENSE.opencode and the
+  packaged OpenCode resources. Claude Code is not redistributed.
+
 Cua Driver
   Copyright Cua AI, Inc. and contributors
   Source: https://github.com/trycua/cua

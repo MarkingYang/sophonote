@@ -24,7 +24,7 @@ function chooseDmg(assets) {
   const dmgAssets = assets.filter((asset) => asset.name?.toLowerCase().endsWith(".dmg"));
   return (
     dmgAssets.find((asset) => /(aarch64|arm64|apple[-_ ]?silicon)/i.test(asset.name)) ??
-    dmgAssets[0]
+    null
   );
 }
 
@@ -42,14 +42,17 @@ async function hydrateLatestRelease() {
   try {
     const response = await fetch(RELEASES_API_URL, {
       headers: { Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
 
     const releases = await response.json();
+    if (!Array.isArray(releases)) throw new Error("Invalid release list");
+    releases.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
     const release = releases.find((candidate) => !candidate.draft && chooseDmg(candidate.assets ?? []));
     const dmg = release ? chooseDmg(release.assets ?? []) : null;
     if (!release || !dmg?.browser_download_url) {
-      setReleaseFallback("最新 Release 暂无 DMG；可先从源码运行，或关注 GitHub Releases。");
+      setReleaseFallback("暂无 Apple Silicon 安装包；请前往 GitHub Releases 查看发布状态。");
       return;
     }
 
@@ -70,7 +73,7 @@ async function hydrateLatestRelease() {
     });
   } catch (error) {
     console.info("Latest SophoNote release is not available yet.", error);
-    setReleaseFallback("GitHub 暂无可读取的公开 DMG；可先从源码运行，或关注 Releases。");
+    setReleaseFallback("暂时无法读取版本信息；下载按钮仍可打开 GitHub Releases。");
   }
 }
 

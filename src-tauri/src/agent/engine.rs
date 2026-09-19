@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::sophonote_mcp::ModelRoute;
 use crate::model::gateway::SharedGateway;
+use crate::sophonote_mcp::ModelRoute;
 use crate::tools::ToolRegistry;
 
 use super::events::EventEmitter;

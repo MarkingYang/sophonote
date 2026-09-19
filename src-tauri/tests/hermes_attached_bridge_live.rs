@@ -10,12 +10,12 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::json;
 use sophonote_lib::agent::hermes::configure_sophonote_surface;
 use sophonote_lib::db::create_schema;
 use sophonote_lib::sophonote_mcp::{
     bridge_patch_registry, ensure_bridge_http, issue_lease, ModelRoute, BRIDGE_TOOL_NAMES,
 };
-use serde_json::json;
 
 #[tokio::test]
 async fn bridge_http_tools_call_list_with_lease() {

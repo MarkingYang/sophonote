@@ -122,3 +122,15 @@ describe('DEC-014 Hermes 能力透传', () => {
     expect(request.focusDocument).toBeNull();
   });
 });
+
+describe('笔记与第四引擎请求契约', () => {
+  it('空白笔记也随 OpenCode 请求传递身份、版本与空正文', async () => {
+    const focusDocument = { articleId: 'blank-note', title: '未命名文档', baseVersion: 1, markdown: '' };
+    await useAgentStore.getState().startRun(null, '写一篇笔记', undefined, null, null,
+      focusDocument, [], 'model', 'provider', null, false, null, 'ask', 'opencode');
+    const request = (invokeMock.mock.calls.find(([command]) => command === 'agent_run_start')![1] as { request: Record<string, unknown> }).request;
+    expect(request.engine).toBe('opencode');
+    expect(request.focusDocument).toEqual(focusDocument);
+    expect(request.selection).toBeNull();
+  });
+});

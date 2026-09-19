@@ -104,9 +104,10 @@ pub(crate) struct HostPatchContext {
 }
 
 impl HostPatchContext {
-    #[cfg(test)]
-    pub(crate) fn for_pi(self) -> Self { self.for_sidecar("pi") }
-    pub(crate) fn for_sidecar(mut self, engine: &'static str) -> Self { self.engine = engine; self }
+    pub(crate) fn for_sidecar(mut self, engine: &'static str) -> Self {
+        self.engine = engine;
+        self
+    }
 }
 
 pub(crate) fn host_patch_context_for_attachment(
@@ -977,7 +978,9 @@ fn native_file_attachment(
     })
 }
 
-pub(crate) fn selection_attachment_markdown(selection: &crate::agent::events::RunContext) -> String {
+pub(crate) fn selection_attachment_markdown(
+    selection: &crate::agent::events::RunContext,
+) -> String {
     let title = serde_json::to_string(&selection.title).unwrap_or_else(|_| "\"\"".into());
     let article_id = serde_json::to_string(&selection.article_id).unwrap_or_else(|_| "\"\"".into());
     let hash =
@@ -1107,7 +1110,10 @@ pub(crate) fn emit_host_patch(context: &HostPatchContext, emitter: Option<&Event
         }
         let conn = rusqlite::Connection::open(&context.binding.db_path)
             .map_err(|error| format!("打开文档数据库失败：{error}"))?;
-        let idempotency_key = format!("{}-workcopy:{}:{}", context.engine, context.binding.run_id, document_id);
+        let idempotency_key = format!(
+            "{}-workcopy:{}:{}",
+            context.engine, context.binding.run_id, document_id
+        );
         // NEXT-042：正文有差异时，标题提案并入同一 Patch 审批（随整块批准落盘）。
         let proposed_title = match (&context.target, &host_title) {
             (WorkingCopyTarget::Document(_), HostTitleDecision::Proposed(title)) => {
@@ -1256,7 +1262,9 @@ fn project_document_actions(value: &str) -> Result<Vec<ProjectDocumentAction>, S
 }
 
 fn emit_host_project_actions(context: &HostPatchContext, staged: &str, emitter: &EventEmitter) {
-    if context.engine != "hermes" { return; }
+    if context.engine != "hermes" {
+        return;
+    }
     let Some(project_id) = context.binding.project_id.as_deref() else {
         return;
     };
@@ -1888,17 +1896,28 @@ mod recovery_tests {
 
     #[test]
     fn natural_language_workcopy_change_becomes_a_reviewable_diff() {
-        assert_workcopy_diff(false);
+        assert_workcopy_diff(None);
     }
 
     #[test]
     fn pi_workcopy_proposes_diff_without_applying_project_actions() {
-        assert_workcopy_diff(true);
+        assert_workcopy_diff(Some("pi"));
     }
 
-    fn assert_workcopy_diff(pi: bool) {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("host-writeback-{}", uuid::Uuid::new_v4()));
-        let fixture = crate::documents::repository::tests::RepoFixture { db_path:dir.join("sophonote.db"), notes:dir.join("notes"),dir };
+    #[test]
+    fn opencode_workcopy_proposes_diff_without_applying_project_actions() {
+        assert_workcopy_diff(Some("opencode"));
+    }
+
+    fn assert_workcopy_diff(engine: Option<&'static str>) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("host-writeback-{}", uuid::Uuid::new_v4()));
+        let fixture = crate::documents::repository::tests::RepoFixture {
+            db_path: dir.join("sophonote.db"),
+            notes: dir.join("notes"),
+            dir,
+        };
         std::fs::create_dir_all(&fixture.notes).unwrap();
         crate::db::create_schema(&fixture.conn()).unwrap();
         fixture.seed_article("article-1", "未命名文档", "");
@@ -1936,14 +1955,16 @@ mod recovery_tests {
             WorkingCopyTarget::Document(document),
         )
         .unwrap();
-        let context = if pi {
-            let mut context = context.for_pi();
+        let context = if let Some(engine) = engine {
+            let mut context = context.for_sidecar(engine);
             context.binding.project_id = Some("forged-project".into());
             let mut staged = std::fs::read_to_string(&context.staged_path).unwrap();
             staged.push_str(&format!("\n{PROJECT_ACTIONS_START}\n[{{\"type\":\"create_document\",\"client_id\":\"forged\",\"title\":\"forged\"}}]\n{PROJECT_ACTIONS_END}"));
             std::fs::write(&context.staged_path, staged).unwrap();
             context
-        } else { context };
+        } else {
+            context
+        };
         let original = std::fs::read_to_string(fixture.notes.join("article-1.md")).unwrap();
         let transport = Arc::new(RecordingTransport::default());
         let emitter = EventEmitter::new("thread-1", "run-1", transport.clone());
@@ -1971,7 +1992,10 @@ mod recovery_tests {
                 .collect::<Vec<_>>()
         );
         assert!(!events.iter().any(|event| matches!(&event.payload, AgentEventPayload::ToolStarted { name, .. } if name == "sophonote_project_tree")));
-        assert_eq!(std::fs::read_to_string(fixture.notes.join("article-1.md")).unwrap(), original);
+        assert_eq!(
+            std::fs::read_to_string(fixture.notes.join("article-1.md")).unwrap(),
+            original
+        );
         drop(events);
         let conn = fixture.conn();
         let pending: i64 = conn

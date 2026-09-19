@@ -1052,7 +1052,7 @@ html .milkdown .ProseMirror .hb-document-diff-pending .hb-document-diff-body {
 
 /* 每轮只保留一个执行区：运行时固定高度内更新，完成后收成一行。 */
 .hb-chat-process {
-  max-width: 78ch;
+  width: 100%;
   color: var(--text-tertiary);
   font-size: 12px;
 }
@@ -1060,15 +1060,23 @@ html .milkdown .ProseMirror .hb-document-diff-pending .hb-document-diff-body {
 .hb-chat-process-summary {
   display: flex;
   width: 100%;
-  min-height: 28px;
+  min-height: 36px;
   align-items: center;
-  gap: 6px;
-  border-radius: 7px;
-  padding: 3px 6px;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--bg-sunken);
   color: var(--text-tertiary);
   text-align: left;
   transition: background-color 120ms ease, color 120ms ease;
 }
+
+.hb-chat-process-label { color: var(--text-secondary); font-weight: 500; }
+.hb-chat-process-metrics { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.hb-chat-process-summary:disabled { cursor: default; }
+.hb-chat-process-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hb-chat-process[data-waiting] .hb-chat-process-summary { background: var(--warning-subtle); color: var(--warning); }
+.hb-chat-process-wait { margin: 6px 10px 10px; font-size: 11px; line-height: 1.7; color: var(--text-secondary); }
 
 .hb-chat-process-summary:hover {
   background: var(--bg-sunken);
@@ -1079,7 +1087,7 @@ html .milkdown .ProseMirror .hb-document-diff-pending .hb-document-diff-body {
   max-height: 144px;
   overflow-y: auto;
   margin: 2px 0 4px 12px;
-  border-left: 2px solid var(--border-default);
+  border-left: 1px solid var(--border-default);
   padding: 4px 8px 5px 12px;
   color: var(--text-tertiary);
   line-height: 1.55;
@@ -1087,7 +1095,39 @@ html .milkdown .ProseMirror .hb-document-diff-pending .hb-document-diff-body {
 }
 
 .hb-chat-process-steps li + li {
-  margin-top: 3px;
+  margin-top: 7px;
+}
+
+/* 项目与笔记：共用文字层级与选中态，保留原有工作区布局。 */
+.sn-project-home { max-width: 1120px; margin: 0 auto; padding: 28px 32px; }
+.sn-project-total { color: var(--text-tertiary); font-size: 14px; font-variant-numeric: tabular-nums; }
+.sn-project-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.sn-project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 320px)); gap: 12px; margin-top: 20px; }
+.sn-project-card { display: flex; flex-direction: column; min-width: 0; padding: 14px 16px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-surface); text-align: left; transition: border-color 150ms, background-color 150ms; }
+.sn-project-card:hover { border-color: var(--accent-border); background: color-mix(in srgb, var(--accent-subtle) 25%, var(--bg-surface)); }
+.sn-project-card-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.sn-project-icon { display: inline-flex; flex-shrink: 0; color: var(--text-secondary); }
+.sn-project-pin { display: inline-flex; align-items: center; gap: 4px; color: var(--text-tertiary); font-size: 11px; }
+.sn-project-arrow { margin-left: auto; flex-shrink: 0; color: var(--text-tertiary); }
+.sn-project-card:hover .sn-project-arrow { color: var(--accent); }
+.sn-project-card h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; font-weight: 600; }
+.sn-project-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 5px 0 14px; padding-left: 24px; font-size: 11px; color: var(--text-tertiary); }
+.sn-project-card-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.sn-project-card-footer strong { color: var(--text-secondary); font-weight: 500; }
+.sn-workspace-sidebar { width: clamp(240px, 23vw, 288px); min-height: 0; }
+.sn-task-row { border-radius: 9px; margin-bottom: 4px; transition: background-color 120ms; }
+.sn-task-row:hover, .sn-note-row:hover { background: var(--bg-surface); }
+.sn-task-row[data-selected], .sn-note-row.is-selected { background: var(--accent-subtle); box-shadow: inset 2px 0 var(--accent); }
+.sn-task-open { padding: 11px 12px; border-radius: 9px; }
+.sn-note-row { padding: 12px; border-radius: 9px; transition: background-color 120ms; }
+.sn-note-row.is-batch-selected { background: var(--accent-subtle); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.sn-note-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 7px; font-size: 11px; line-height: 1.5; color: var(--text-tertiary); }
+.sn-note-kind { color: var(--text-secondary); }
+.sn-note-date { margin-left: auto; font-variant-numeric: tabular-nums; }
+.sn-project-card:focus-visible, .sn-project-toolbar :is(button, input, select):focus-visible,
+.sn-workspace-sidebar :is(button, input, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .sn-project-card, .sn-task-row, .sn-note-row { transition: none; }
 }
 
 /* Chat 内 Agent Markdown：加强标题/列表间距，避免「有结构却像一堵墙」 */
@@ -1126,10 +1166,109 @@ html .milkdown .ProseMirror .hb-document-diff-pending .hb-document-diff-body {
   margin-bottom: 0;
 }
 
-/* 宽 Chat 中结构化块充分使用面板，普通正文仍维持约 78ch 的阅读行长。 */
-.hb-chat-agent-markdown > :not(.hb-markdown-copy-block) {
-  max-width: 78ch;
+/* 项目执行与笔记正文：在各自可用画布内居中，不改变原有滚动容器。 */
+.sn-chat-surface,
+.sn-note-workbench {
+  --sn-reading-width: 800px;
+  --sn-reading-gutter: 24px;
+  background: var(--bg-surface);
 }
+.sn-chat-surface { container: sn-chat / inline-size; }
+.sn-reading-column {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--sn-reading-width);
+  margin-inline: auto;
+}
+.sn-chat-viewport { padding: 28px var(--sn-reading-gutter) 32px; }
+.sn-chat-composer-dock { padding: 12px var(--sn-reading-gutter) 18px; }
+.sn-chat-timeline { display: flex; flex-direction: column; gap: 24px; }
+.sn-chat-user { display: flex; flex-direction: column; align-items: flex-end; }
+.sn-chat-user-bubble {
+  max-width: 85%;
+  padding: 10px 16px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sn-chat-answer,
+.sn-chat-surface .hb-chat-agent-markdown,
+.sn-note-preview .md-body,
+.sn-note-preview-placeholder {
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.sn-chat-surface .hb-chat-agent-markdown p,
+.sn-note-preview .md-body p { margin-block: 0.8em; }
+.sn-chat-surface .hb-chat-agent-markdown :is(h1, h2, h3, h4),
+.sn-note-preview .md-body :is(h1, h2, h3, h4) {
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.5;
+  margin-block: 1.6em 0.65em;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.sn-chat-surface .hb-chat-agent-markdown h1,
+.sn-note-preview .md-body h1 { font-size: 22px; }
+.sn-chat-surface .hb-chat-agent-markdown h2,
+.sn-note-preview .md-body h2 { font-size: 18px; }
+.sn-chat-surface .hb-chat-agent-markdown h3,
+.sn-note-preview .md-body h3 { font-size: 16px; }
+.sn-chat-surface .hb-chat-agent-markdown h4,
+.sn-note-preview .md-body h4 { font-size: 14px; }
+.sn-chat-surface .hb-chat-agent-markdown > :first-child,
+.sn-note-preview .md-body > :first-child { margin-top: 0; }
+.sn-chat-surface .md-body pre,
+.sn-note-preview .md-body pre {
+  max-width: 100%;
+  padding: 16px 18px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: normal;
+}
+.sn-chat-surface .md-body table,
+.sn-note-preview .md-body table { display: block; max-width: 100%; overflow-x: auto; }
+.sn-note-preview { padding: 32px var(--sn-reading-gutter) 80px; }
+/* Crepe 默认左右各 120px；在滚动视口内限制正文，保留块操作栏所需的页边距。 */
+html .sn-note-editor .milkdown {
+  --crepe-base-font-size: 14px;
+  --crepe-color-background: var(--bg-surface);
+  --crepe-color-on-background: var(--text-secondary);
+}
+html .sn-note-editor .milkdown .ProseMirror {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--sn-reading-width) + var(--sn-reading-gutter) * 2);
+  margin-inline: auto;
+  padding: 32px var(--sn-reading-gutter) 80px;
+  font-size: 14px;
+  line-height: 1.85;
+}
+html .sn-note-editor .milkdown .ProseMirror p { line-height: 1.85; margin-block: 0.8em; }
+html .sn-note-editor .milkdown .ProseMirror :is(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: 1.5;
+  margin-block: 1.6em 0.65em;
+}
+html .sn-note-editor .milkdown .ProseMirror h1 { font-size: 22px; }
+html .sn-note-editor .milkdown .ProseMirror h2 { font-size: 18px; }
+html .sn-note-editor .milkdown .ProseMirror h3 { font-size: 16px; }
+html .sn-note-editor .milkdown .ProseMirror h4 { font-size: 14px; }
+html .sn-note-editor .milkdown .ProseMirror > :first-child { margin-top: 0; }
+@container sn-chat (max-width: 520px) {
+  .sn-chat-viewport { padding: 16px 12px 24px; }
+  .sn-chat-composer-dock { padding: 8px 12px 12px; }
+  .sn-chat-user-bubble { max-width: 92%; }
+}
+
 
 /* Chat 特殊 Markdown 块：正文仍按预览阅读，复制按钮只复制该表格/图/代码块源码。
    控件贴右上角并在悬停时增强，不为普通段落制造按钮噪音。 */

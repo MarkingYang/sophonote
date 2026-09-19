@@ -594,7 +594,8 @@ mod tests {
 
     #[test]
     fn lists_large_directories_without_a_global_item_cap() {
-        let root = std::env::temp_dir().join(format!("sophonote-directory-test-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("sophonote-directory-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create temp directory");
         for index in 0..1_205 {
             fs::write(root.join(format!("file-{index:04}.txt")), b"").expect("create fixture");

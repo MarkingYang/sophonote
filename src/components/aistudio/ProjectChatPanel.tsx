@@ -8,7 +8,7 @@
 // - 从事件流归约消息列表（useAgentStore.messagesOfThread）
 // - 断线恢复（useAgentStore.replayEvents / loadThreadHistory）
 //
-// AG-01：多会话 tab / 历史 / 归档；能力管理统一放在设置页。
+// AG-01：多任务 tab / 历史 / 归档；能力管理统一放在设置页。
 // AG-16：Chat 折叠仍在 AIStudio 首行；本组件始终为「展开态」。
 // ============================================================
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
 import { AgentEngineControl } from './AgentEngineControl';
+import ProcessRail from './ProcessRail';
 import { useSidecarConfig } from './useSidecarConfig';
 import { ComputerUsePanel, COMPUTER_NOTE_SKILL } from './ComputerUsePanel';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -58,7 +59,6 @@ import {
   groupToolCardsByRunId,
   timelineToolCards,
   toolDisplayName,
-  toolStepSummary,
 } from '../../services/agentProcessRail';
 import {
   shouldRenderAreaBContent,
@@ -144,20 +144,23 @@ import {
 } from '../../services/hermesComposer';
 
 interface ProjectChatPanelProps {
-  /** null = 全局快捷会话；string = 项目内会话。 */
+  /** null = 全局快捷任务；string = 项目内任务。 */
   projectId?: string | null;
   /** Change Session 的前端作用域；笔记本无 projectId，但仍需接收左侧文档 Patch。 */
   changeScopeId?: string | null;
   projectName?: string;
   threadId?: string | null;
-  /** 项目会话草稿：首次发送前不创建 Thread。 */
+  /** 显式从项目文件阅读面加入本轮附件。 */
+  fileContextRequest?: { nonce: number; attachment: AgentAttachmentInput } | null;
+  /** 项目任务草稿：首次发送前不创建 Thread。 */
   draftSession?: boolean;
   onDraftSessionChange?: (draft: boolean) => void;
   onThreadCreated?: (threadId: string) => void;
-  /** 独立会话页已有左侧历史栏时，隐藏面板自己的 tab/history 头。 */
+  /** 独立任务页已有左侧历史栏时，隐藏面板自己的 tab/history 头。 */
   showThreadNavigation?: boolean;
   /** 非项目场景的空态与输入提示。 */
   emptyHint?: string;
+  showEmptyState?: boolean;
   composerPlaceholder?: string;
   /** AG-26：当前编辑器选区的范围 chip（null = 全项目对话；由宿主捕获后经此注入） */
   selection?: RunContext | null;
@@ -165,25 +168,25 @@ interface ProjectChatPanelProps {
   selectionLines?: [number, number] | null;
   /** 移除 composer 上的范围 chip（X 按钮 / 发送后消费） */
   onClearSelection?: () => void;
-  /** 当前中栏文档；用于把后续 Query 自动绑定到尚未落定的同一变更会话。 */
+  /** 当前中栏文档；用于把后续 Query 自动绑定到尚未落定的同一变更任务。 */
   activeDocumentId?: string | null;
   /** 当前中栏文档标题（由父 Surface 展示；正文通过 resolver 在发送时读取） */
   activeDocumentTitle?: string | null;
   /** 发送时读取编辑器最新草稿；避免按键级把整篇正文放入 React state。 */
   resolveActiveDocumentContext?: () => Promise<FocusDocumentInput | null>;
-  /** 用户从左侧显式把项目加入会话；发送项目清单工作副本，不隐式读取成员正文。 */
+  /** 用户从左侧显式把项目加入任务；发送项目清单工作副本，不隐式读取成员正文。 */
   includeProjectContext?: boolean;
   /** 移除显式项目范围。 */
   onClearProjectContext?: () => void;
-  /** 本地项目目录：作为本会话每一轮的持续文件夹上下文，不随发送清空。 */
+  /** 本地项目目录：作为本任务每一轮的持续文件夹上下文，不随发送清空。 */
   workspaceRoot?: string | null;
   /** 当前工作区权限模式；由绑定工作区的 Chat / 项目持久化。 */
   workspacePermissionMode?: WorkspacePermissionMode;
-  /** 权限模式只能从会话 Surface 调整；文件/终端工作面只消费该值。 */
+  /** 权限模式只能从任务 Surface 调整；文件/终端工作面只消费该值。 */
   onWorkspacePermissionModeChange?: (mode: WorkspacePermissionMode) => void;
   /** 移除持续项目目录。 */
   onClearWorkspace?: () => void;
-  /** 工作室将 Browser 放入 IDE 省略号时关闭会话内重复入口。 */
+  /** 工作室将 Browser 放入 IDE 省略号时关闭任务内重复入口。 */
   showBrowserTab?: boolean;
   /** workspace = 中央主画布，不绘制旧右栏分隔线。 */
   layout?: 'panel' | 'workspace';
@@ -200,10 +203,10 @@ const CAPABILITY_MENU_ITEMS: ReadonlyArray<{
   label: string;
   icon: typeof Boxes;
 }> = [
-  { key: 'skills', label: 'Skill', icon: Boxes },
-  { key: 'tools', label: 'Tools', icon: Wrench },
+  { key: 'skills', label: '技能', icon: Boxes },
+  { key: 'tools', label: '工具', icon: Wrench },
   { key: 'mcp', label: 'MCP', icon: Server },
-  { key: 'hub', label: 'Browse Hub', icon: Search },
+  { key: 'hub', label: '资源广场', icon: Search },
 ];
 
 function attachmentId(): string {
@@ -229,8 +232,9 @@ function blobAsDataUrl(blob: Blob): Promise<string> {
 export default function ProjectChatPanel({
   projectId,
   changeScopeId: requestedChangeScopeId,
-  projectName = '工作室',
+  projectName = '项目',
   threadId: propThreadId,
+  fileContextRequest,
   draftSession = false,
   onDraftSessionChange,
   onThreadCreated,
@@ -249,6 +253,7 @@ export default function ProjectChatPanel({
   showBrowserTab = true,
   showThreadNavigation = true,
   emptyHint,
+  showEmptyState = true,
   composerPlaceholder,
   layout = 'panel',
 }: ProjectChatPanelProps) {
@@ -284,7 +289,7 @@ export default function ProjectChatPanel({
   const [activeThreadId, setActiveThreadId] = useState<string | null>(propThreadId ?? selectedThreadId ?? null);
   const [localDraftSession, setLocalDraftSession] = useState(false);
   const isDraftSession = draftSession || localDraftSession;
-  // 新建 Thread 需要一次 Tauri 往返。在新 id 回到前显式展示空白会话，禁止
+  // 新建 Thread 需要一次 Tauri 往返。在新 id 回到前显式展示空白任务，禁止
   // resolveProjectThreadId 回退到旧 Thread；ref 同时拦住快速连点产生多个空 Tab。
   const creatingThreadRef = useRef(false);
   const [creatingThread, setCreatingThread] = useState(false);
@@ -378,11 +383,16 @@ export default function ProjectChatPanel({
 
   // projectId / 外部 thread 变化时重置本地 Thread 状态；首挂已用 props 初始化，跳过以免多一次整板 commit。
   const projectScopeReadyRef = useRef(false);
+  const previousProjectRef = useRef(projectId);
   useEffect(() => {
     if (!projectScopeReadyRef.current) {
       projectScopeReadyRef.current = true;
       return;
     }
+    const sameProject = previousProjectRef.current === projectId;
+    previousProjectRef.current = projectId;
+    // 引擎选择器发起的本地新任务已经清理范围；保留刚恢复的输入与附件。
+    if (sameProject && localDraftSession && propThreadId == null) return;
     setActiveThreadId(propThreadId ?? null);
     setLocalDraftSession(false);
     historyRestoredRef.current = null;
@@ -393,6 +403,12 @@ export default function ProjectChatPanel({
     setComposerError(null);
     setModelMenuOpen(false);
   }, [projectId, propThreadId]);
+
+  useEffect(() => {
+    if (!fileContextRequest) return;
+    setAttachments((previous) => previous.some((item) => item.path === fileContextRequest.attachment.path)
+      ? previous : [...previous, fileContextRequest.attachment]);
+  }, [fileContextRequest]);
 
   // 三种引擎共用 Host 模型配置及同一选择偏好；Hermes 的目录仍由 Runtime 投影。
   const refreshHermesModels = useCallback(() => {
@@ -460,7 +476,7 @@ export default function ProjectChatPanel({
 
   // 当前 Thread 的消息列表
   // 项目切换后的首帧可能还保留上一个项目的本地 activeThreadId；解析时再次
-  // 校验 Thread.projectId，保证旧会话永远不会被提交到新项目。
+  // 校验 Thread.projectId，保证旧任务永远不会被提交到新项目。
   const requestedThreadId = activeThreadId ?? propThreadId;
   const explicitThreadId = requestedThreadId && threads.some((thread) => (
     thread.id === requestedThreadId && thread.projectId === scopedProjectId
@@ -477,7 +493,7 @@ export default function ProjectChatPanel({
   const engineLocked = currentThread?.latestRunId != null;
   const engine = engineLocked ? currentThread?.engine ?? 'hermes' : draftEngine;
   const isSidecar = engine !== 'hermes';
-  const engineLabel = engine === 'claude_code' ? 'Claude Code' : engine === 'pi' ? 'Pi' : 'Hermes';
+  const engineLabel = engine === 'opencode' ? 'OpenCode' : engine === 'claude_code' ? 'Claude Code' : engine === 'pi' ? 'Pi' : 'Hermes';
   const modelConfig = useAppStore((state) => state.settings.aiConfig);
   const { models: sidecarModels, status: sidecarStatus, error: sidecarError,
     selection: sidecarSelection, setSelection: setSidecarSelection, refresh: setSidecarRefresh,
@@ -509,7 +525,7 @@ export default function ProjectChatPanel({
   const currentRunIds = useSurfaceAgentStore((state) =>
     currentThreadId ? state.runIdsByThreadId[currentThreadId] ?? EMPTY_RUN_IDS : EMPTY_RUN_IDS
   );
-  // ISSUE-027：只订阅当前 Thread 的事件数组。后台会话有 token 到达时，
+  // ISSUE-027：只订阅当前 Thread 的事件数组。后台任务有 token 到达时，
   // useShallow 会保持该对象引用稳定，既不重渲染长时间线，也不触发贴底。
   const eventsByRunId = useSurfaceAgentStore(useShallow((state) => Object.fromEntries(
     currentRunIds.map((runId) => [runId, state.eventsByRunId[runId] ?? []])
@@ -689,7 +705,7 @@ export default function ProjectChatPanel({
     requestAnimationFrame(scrollTimelineToBottom);
   }, [currentThreadId, latestStart, scrollTimelineToBottom]);
 
-  // 切换会话时默认从最新内容开始；历史尚未装载时保留一次初始化贴底。
+  // 切换任务时默认从最新内容开始；历史尚未装载时保留一次初始化贴底。
   const timelineThreadRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     timelineFollowingRef.current = true;
@@ -705,7 +721,7 @@ export default function ProjectChatPanel({
     // 捕获切换当下的最近窗口；这里不依赖 timeline.length，
     // 否则新消息到达会把正在阅读历史的用户强制拉回底部。
     setTimelineWindow({ threadId: currentThreadId, start: latestTimelineStart(timeline.length) });
-    // timeline.length 只取会话切换这一刻的快照，刻意不作为依赖。
+    // timeline.length 只取任务切换这一刻的快照，刻意不作为依赖。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentThreadId]);
 
@@ -1044,6 +1060,21 @@ export default function ProjectChatPanel({
     setAttachmentMenuOpen(false);
   }, [appendAttachments, urlDraft]);
 
+  const savingAnswerRef = useRef(false);
+  const [savingAnswer, setSavingAnswer] = useState(false);
+  const saveAnswerToNote = useCallback(async (message: AgentMessage) => {
+    if (savingAnswerRef.current || conversationLocked || !activeDocumentId || !changeScopeId) return;
+    savingAnswerRef.current = true; setSavingAnswer(true); setComposerError(null);
+    try {
+      const document = await resolveActiveDocumentContext?.();
+      if (!document || document.articleId !== activeDocumentId || document.markdown == null) throw new Error('当前笔记已切换或尚未保存，请重试。');
+      const preview = await tauri.documentPreviewChatAnswer(document.articleId, document.baseVersion, document.markdown, message.runId);
+      await adoptProposal({ ...preview, proposedTitle: preview.proposedTitle ?? null }, { projectId: changeScopeId, threadId: message.threadId, runId: message.runId });
+    } catch (error) {
+      setComposerError(error instanceof Error ? error.message : String(error));
+    } finally { savingAnswerRef.current = false; setSavingAnswer(false); }
+  }, [activeDocumentId, changeScopeId, conversationLocked, resolveActiveDocumentContext, adoptProposal]);
+
   // 发送消息
   const handleSend = async (text: string) => {
     if ((!text.trim() && attachments.length === 0) || conversationLocked) return false;
@@ -1060,7 +1091,7 @@ export default function ProjectChatPanel({
     if (activeDocumentId && !includeProjectContext && !(selection ?? continuationContext)) {
       try {
         focusDocument = await resolveActiveDocumentContext?.() ?? null;
-        if (!focusDocument) {
+        if (!focusDocument || focusDocument.articleId !== activeDocumentId) {
           setComposerError('当前文档已切换或暂时无法读取，请确认文档后重试。');
           return false;
         }
@@ -1091,7 +1122,7 @@ export default function ProjectChatPanel({
       text,
       projectId ?? undefined,
       selection ?? continuationContext,
-      isSidecar || hermesCommand ? null : activeSkill,
+      isSidecar || hermesCommand ? null : activeSkill ?? (focusDocument ? 'sophonote-note-persistence' : null),
       focusDocument,
       runAttachments,
       displayModel,
@@ -1132,7 +1163,7 @@ export default function ProjectChatPanel({
   };
 
   const handleNewSession = async (): Promise<boolean> => {
-    if (hasProjectScope) {
+    if (hasProjectScope || onDraftSessionChange) {
       setLocalDraftSession(true);
       onDraftSessionChange?.(true);
       setActiveThreadId(null);
@@ -1150,7 +1181,7 @@ export default function ProjectChatPanel({
     setAttachments([]);
     setComposerError(null);
     try {
-      const id = await createThread(projectId ?? undefined, '新会话');
+      const id = await createThread(projectId ?? undefined, '新任务');
       if (!id) {
         setActiveThreadId(previousThreadId);
         selectThread(previousThreadId);
@@ -1175,7 +1206,7 @@ export default function ProjectChatPanel({
         setAttachments(draftAttachments);
         setComposerPrefill({ nonce: Date.now(), text: draft });
         if (!created) {
-          setComposerError('新建会话失败，仍保留原引擎，请重试。');
+          setComposerError('新建任务失败，仍保留原引擎，请重试。');
           return false;
         }
       }
@@ -1213,7 +1244,7 @@ export default function ProjectChatPanel({
 
   const runHermesUndo = useCallback(async (command: string) => {
     if (!currentThreadId) {
-      setComposerError('当前会话还没有可撤回的 Hermes 对话');
+      setComposerError('当前任务还没有可撤回的 Hermes 对话');
       return;
     }
     if (conversationLocked) {
@@ -1245,7 +1276,7 @@ export default function ProjectChatPanel({
       return true;
     }
     const control = isSessionControlCommand(command);
-    if (isSidecar && control) { setComposerError('此命令仅适用于 Hermes 会话'); return true; }
+    if (isSidecar && control) { setComposerError('此命令仅适用于 Hermes 任务'); return true; }
     if (control === 'undo') {
       void runHermesUndo(command);
       return true;
@@ -1298,14 +1329,14 @@ export default function ProjectChatPanel({
   };
 
   const threadTitle = (t: AgentThread) => {
-    const raw = (t.title || '').trim() || '新会话';
+    const raw = (t.title || '').trim() || '新任务';
     return raw.length > 18 ? `${raw.slice(0, 18)}…` : raw;
   };
 
   return (
     <aside
       ref={chatPanelRef}
-      className={`w-full h-full bg-[var(--bg-surface)] flex flex-col relative ${layout === 'panel' ? 'border-l border-[var(--border-default)]' : ''}`}
+      className={`sn-chat-surface w-full min-w-0 h-full bg-[var(--bg-surface)] flex flex-col relative ${layout === 'panel' ? 'border-l border-[var(--border-default)]' : ''}`}
     >
       {showBrowserTab && !isSidecar && <header className="h-9 shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-2 flex items-center gap-1">
         <button type="button" onClick={() => setSurfaceTab('chat')} className={`h-7 rounded-md px-2.5 inline-flex items-center gap-1.5 text-xs font-medium ${surfaceTab === 'chat' ? 'bg-[var(--accent-subtle)] text-[var(--accent)]' : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]'}`}>
@@ -1336,13 +1367,13 @@ export default function ProjectChatPanel({
         />
       ) : (
       <>
-      {/* AG-01：左会话 tab · 右 + / 历史；能力管理位于设置页。 */}
+      {/* AG-01：左任务 tab · 右 + / 历史；能力管理位于设置页。 */}
       {showThreadNavigation && <header className="px-2 h-10 border-b border-[var(--border-default)] flex items-center gap-1 shrink-0 min-w-0">
         <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
           {activeProjectThreads.length === 0 ? (
             <div className="flex items-center gap-1.5 px-2 text-[var(--text-tertiary)] shrink-0">
               <Sparkles size={13} className="text-[var(--accent)]" />
-              <span className="text-xs text-[var(--text-tertiary)]">新会话</span>
+              <span className="text-xs text-[var(--text-tertiary)]">新任务</span>
             </div>
           ) : (
             activeProjectThreads.map((t) => {
@@ -1357,7 +1388,7 @@ export default function ProjectChatPanel({
                       ? 'bg-[var(--bg-sunken)] text-[var(--text-primary)]'
                       : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text-secondary)]'
                   }`}
-                  title={t.title || '新会话'}
+                  title={t.title || '新任务'}
                 >
                   <Sparkles size={11} className={active ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'} />
                   <span className="truncate">{threadTitle(t)}</span>
@@ -1387,7 +1418,7 @@ export default function ProjectChatPanel({
             onClick={() => void handleNewSession()}
             disabled={creatingThread}
             className="w-7 h-7 rounded-md flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text-secondary)] disabled:cursor-wait disabled:opacity-50"
-            title="新建会话"
+            title="新建任务"
           >
             {creatingThread ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
           </button>
@@ -1400,7 +1431,7 @@ export default function ProjectChatPanel({
             className={`w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--bg-sunken)] ${
               historyOpen ? 'text-[var(--accent)] bg-[var(--bg-sunken)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
             }`}
-            title="历史会话"
+            title="历史任务"
           >
             <Clock size={14} />
           </button>
@@ -1409,10 +1440,10 @@ export default function ProjectChatPanel({
               <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
               <div className="absolute right-0 top-9 z-40 w-72 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)] py-1 max-h-80 overflow-y-auto">
                 <p className="px-3 py-1.5 text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
-                  历史会话
+                  历史任务
                 </p>
                 {projectHistoryThreads.length === 0 ? (
-                  <p className="px-3 py-4 text-xs text-[var(--text-tertiary)] text-center">暂无历史会话</p>
+                  <p className="px-3 py-4 text-xs text-[var(--text-tertiary)] text-center">暂无历史任务</p>
                 ) : (
                   projectHistoryThreads.map((t) => (
                     <div
@@ -1425,7 +1456,7 @@ export default function ProjectChatPanel({
                         className="flex-1 min-w-0 text-left text-xs text-[var(--text-secondary)] truncate px-1"
                         title="恢复并打开"
                       >
-                        {t.title?.trim() || '未命名会话'}
+                        {t.title?.trim() || '未命名任务'}
                       </button>
                       <button
                         type="button"
@@ -1474,8 +1505,9 @@ export default function ProjectChatPanel({
       <div
         ref={timelineViewportRef}
         onScroll={handleTimelineScroll}
-        className="absolute inset-0 overflow-y-auto p-3"
+        className="sn-chat-viewport absolute inset-0 overflow-y-auto"
       >
+        <div className="sn-reading-column">
         {degradedReason && (
           <div className="mb-2 px-3 py-1.5 rounded-lg bg-[var(--warning-subtle)] border border-[var(--gold-border)] text-xs text-[var(--warning)] leading-relaxed">
             事件流已降级：{degradedReason}
@@ -1492,11 +1524,11 @@ export default function ProjectChatPanel({
           </div>
         )}
         {timeline.length === 0 && orphanPatches.length === 0 && runningRunId == null ? (
-          <EmptyState
+          showEmptyState && <EmptyState
             icon={MessageSquareText}
             title={emptyHint ?? (hasProjectScope
               ? '以当前本地项目为工作范围，用自然语言完成代码与文档任务。'
-              : `直接向 ${engineLabel} Agent 描述任务，过程与结果会保留在当前会话中。`)}
+              : `直接向 ${engineLabel} Agent 描述任务，过程与结果会保留在当前任务中。`)}
           />
         ) : (
           <ChatTimeline
@@ -1505,8 +1537,11 @@ export default function ProjectChatPanel({
             eventsByRunId={eventsByRunId}
             running={runningRunId != null}
             highlightKey={findMatchKey}
+            onSaveAnswer={activeDocumentId && !selection && !continuationContext ? saveAnswerToNote : undefined}
+            saveDisabled={conversationLocked || savingAnswer}
           />
         )}
+        </div>
       </div>
       {showJumpToLatest && (
         <button
@@ -1521,13 +1556,14 @@ export default function ProjectChatPanel({
       </div>
 
       <div
-        className="p-3 border-t border-[var(--border-default)] shrink-0"
+        className="sn-chat-composer-dock shrink-0"
         onDragOver={(event) => {
           event.preventDefault();
           setDropActive(true);
         }}
         onDrop={acceptHtmlDrop}
       >
+        <div className="sn-reading-column">
         {computerPanelOpen && <div className="absolute inset-0 z-30 overflow-y-auto bg-[var(--bg-surface)]">
           <ComputerUsePanel
             enabled={hermesCapabilitySnapshot?.toolsets.some((toolset) => toolset.name === 'computer_use' && toolset.enabled) ?? false}
@@ -1540,7 +1576,7 @@ export default function ProjectChatPanel({
             onRefresh={refreshSkills}
             onNewSession={async () => { await handleNewSession(); }}
             onStop={async () => {
-              if (runningRunId && !(await cancelRun(runningRunId))) throw new Error('未能确认运行已停止，请重试或查看会话状态。');
+              if (runningRunId && !(await cancelRun(runningRunId))) throw new Error('未能确认运行已停止，请重试或查看任务状态。');
             }}
             onPrepare={(text) => {
               pickSkill(COMPUTER_NOTE_SKILL);
@@ -1556,6 +1592,7 @@ export default function ProjectChatPanel({
         {pendingHermesInput && (
           <HermesInputRequest
             request={pendingHermesInput}
+            engineLabel={engineLabel}
             onApproval={(choice) => respondApproval(pendingHermesInput.runId, choice)}
             onClarify={(requestId, answer) =>
               respondClarify(pendingHermesInput.runId, requestId, answer)
@@ -1611,7 +1648,7 @@ export default function ProjectChatPanel({
           <ChatComposer
             placeholder={
               historyLoading
-                ? '正在恢复上一轮会话…'
+                ? '正在恢复上一轮任务…'
                 : resumingRunId
                   ? '正在接续上一轮回复，完成前暂不能继续提问…'
                   : runningRunId
@@ -1637,7 +1674,7 @@ export default function ProjectChatPanel({
             locked={conversationLocked}
             lockLabel={
               historyLoading
-                ? '正在恢复会话'
+                ? '正在恢复任务'
                 : resumingRunId
                   ? '正在接续上一轮回复'
                   : runningRunId
@@ -1761,6 +1798,7 @@ export default function ProjectChatPanel({
             }
           />
         </div>
+        </div>
       </div>
       </>
       )}
@@ -1824,15 +1862,19 @@ const ChatTimeline = memo(function ChatTimeline({
   eventsByRunId,
   running = false,
   highlightKey = null,
+  onSaveAnswer,
+  saveDisabled = false,
 }: {
   items: TimelineItem[];
   toolCardsByRunId: Record<string, ToolCard[]>;
   eventsByRunId: Record<string, AgentEvent[]>;
   running?: boolean;
   highlightKey?: string | null;
+  onSaveAnswer?: (message: AgentMessage) => Promise<void>;
+  saveDisabled?: boolean;
 }) {
   return (
-    <div className="space-y-3">
+    <div className="sn-chat-timeline">
       {items.map((item) =>
         item.kind === 'message' ? (
           <div
@@ -1842,6 +1884,8 @@ const ChatTimeline = memo(function ChatTimeline({
           >
           <ChatMessageView
             message={item.message}
+            onSaveAnswer={onSaveAnswer}
+            saveDisabled={saveDisabled}
             durationMs={item.durationMs}
             streaming={running && item.message.id.endsWith(':streaming')}
             processCards={
@@ -1849,6 +1893,7 @@ const ChatTimeline = memo(function ChatTimeline({
                 ? toolCardsByRunId[item.message.runId] ?? EMPTY_TOOL_CARDS
                 : EMPTY_TOOL_CARDS
             }
+            lastEventAt={item.message.role === 'assistant' ? eventsByRunId[item.message.runId]?.[eventsByRunId[item.message.runId].length - 1]?.timestamp : undefined}
             processStartedAt={
               item.message.role === 'assistant'
                 ? eventsByRunId[item.message.runId]?.find(
@@ -1872,21 +1917,15 @@ const ChatTimeline = memo(function ChatTimeline({
   );
 });
 
-function formatRunDuration(ms: number): string {
-  if (ms < 1000) return '<1 秒';
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`;
-}
-
 const ChatMessageView = memo(function ChatMessageView({
   message,
   durationMs,
   streaming = false,
   processCards = EMPTY_TOOL_CARDS,
   processStartedAt,
+  lastEventAt,
+  onSaveAnswer,
+  saveDisabled = false,
 }: {
   message: AgentMessage;
   durationMs?: number;
@@ -1895,17 +1934,20 @@ const ChatMessageView = memo(function ChatMessageView({
   /** 同 runId 工具步骤（进过程轨；富卡仍可另挂时间线） */
   processCards?: ToolCard[];
   processStartedAt?: number;
+  lastEventAt?: number;
+  onSaveAnswer?: (message: AgentMessage) => Promise<void>;
+  saveDisabled?: boolean;
 }) {
   if (message.role === 'user') {
     return (
-      <article className="hb-chat-timeline-item w-full">
+      <article className="hb-chat-timeline-item sn-chat-user w-full">
         {(message.context || message.skill) && (
           <div className="mb-1.5 flex flex-wrap gap-1 items-center">
             {message.context && <SelectionChip context={message.context} />}
             {message.skill && <SkillRunChip skill={message.skill} />}
           </div>
         )}
-        <div className="w-fit max-w-[78ch] rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap shadow-[var(--shadow-sm)]">
+        <div className="sn-chat-user-bubble">
           {message.content}
         </div>
       </article>
@@ -1921,14 +1963,22 @@ const ChatMessageView = memo(function ChatMessageView({
   });
   return (
     <article className="hb-chat-timeline-item w-full">
-      <div className="w-full px-1 py-1">
+      <div className="w-full min-w-0">
         <ProcessRail
           phase={phase}
           durationMs={durationMs}
           processCards={processCards}
           startedAt={processStartedAt}
+          lastEventAt={lastEventAt}
         />
-        <div className="mt-2 w-full text-[13px] leading-relaxed text-[var(--text-secondary)]" role="region" aria-label="回复">
+        {onSaveAnswer && phase === 'done' && hasAnswer && !streaming && (
+          <button type="button" disabled={saveDisabled} onClick={() => void onSaveAnswer(message)}
+            className="mt-2 rounded-md px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-subtle)] disabled:opacity-40"
+            title="将完整回答追加到当前笔记，先在左侧审阅后保存">
+            写入当前笔记
+          </button>
+        )}
+        <div className="sn-chat-answer mt-3 w-full" role="region" aria-label="回复">
           {showAreaBContent ? (
             <StreamingMarkdownBody content={message.content} streaming={phase === 'answering'} />
           ) : phase === 'answering' && !hasAnswer ? (
@@ -1949,127 +1999,11 @@ const ChatMessageView = memo(function ChatMessageView({
   previous.durationMs === next.durationMs &&
   previous.streaming === next.streaming &&
   previous.processCards === next.processCards &&
+  previous.onSaveAnswer === next.onSaveAnswer &&
+  previous.saveDisabled === next.saveDisabled &&
+  previous.lastEventAt === next.lastEventAt &&
   previous.processStartedAt === next.processStartedAt
 ));
-
-type ExecutionStep = {
-  key: string;
-  label: string;
-  count: number;
-  status: ToolCard['status'];
-};
-
-/**
- * 执行区只展示用户能理解的业务动作。原始 reasoning、工具名称、参数和返回值
- * 都不进入 UI；重复动作归并为一行，避免形成「Used N tools」式噪音。
- */
-function executionSteps(cards: ToolCard[]): ExecutionStep[] {
-  const steps = new Map<string, ExecutionStep>();
-  for (const card of cards) {
-    const summary = toolStepSummary(card);
-    const label = `${toolDisplayName(card.name)}${summary ? ` · ${summary}` : ''}`;
-    const key = label.toLocaleLowerCase();
-    const existing = steps.get(key);
-    if (!existing) {
-      steps.set(key, { key: card.callId, label, count: 1, status: card.status });
-      continue;
-    }
-    existing.count += 1;
-    if (card.status === 'running' || card.status === 'failed') existing.status = card.status;
-  }
-  return [...steps.values()];
-}
-
-/** 单个 Run 只有一个固定高度、可折叠的执行区。 */
-function ProcessRail({
-  phase,
-  durationMs,
-  processCards,
-  startedAt,
-}: {
-  phase: AssistantPhase;
-  durationMs?: number;
-  processCards: ToolCard[];
-  startedAt?: number;
-}) {
-  const steps = useMemo(() => executionSteps(processCards), [processCards]);
-  const running = phase === 'thinking' || phase === 'answering';
-  const now = useActivityNow(running);
-  const elapsedMs = durationMs ?? (startedAt ? Math.max(0, now - startedAt) : undefined);
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const canExpand = steps.length > 0;
-  const open = canExpand && (userOpen ?? running);
-
-  useEffect(() => {
-    // 运行时自动展开，完成后自动收成一行；此后保留用户的手动选择。
-    setUserOpen(null);
-  }, [running]);
-
-  const currentStep = [...processCards].reverse().find((card) => card.status === 'running');
-  const label = phase === 'error'
-    ? '执行未完成'
-    : phase === 'done'
-      ? '已完成'
-      : currentStep
-        ? `正在${toolDisplayName(currentStep.name)}`
-        : phase === 'answering'
-          ? '正在生成回复'
-          : '正在理解任务';
-
-  return (
-    <section className="hb-chat-process" role="region" aria-label="执行进度">
-      <button
-        type="button"
-        onClick={() => canExpand && setUserOpen(!open)}
-        className={`hb-chat-process-summary ${canExpand ? 'cursor-pointer' : 'cursor-default'}`}
-        aria-expanded={canExpand ? open : undefined}
-      >
-        {running ? (
-          <Loader2 size={12} className="shrink-0 animate-spin text-[var(--text-tertiary)]" />
-        ) : phase === 'error' ? (
-          <X size={12} className="shrink-0 text-[var(--danger)]" />
-        ) : (
-          <Check size={12} className="shrink-0 text-[var(--success)]" />
-        )}
-        <span className="font-medium text-[var(--text-secondary)]">{label}</span>
-        {steps.length > 0 ? <span>{steps.length} 项操作</span> : null}
-        {elapsedMs != null ? <span className="tabular-nums">{formatRunDuration(elapsedMs)}</span> : null}
-        {canExpand ? (
-          <ChevronDown size={12} className={`ml-auto shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
-        ) : null}
-      </button>
-      {open ? (
-        <ol className="hb-chat-process-steps">
-          {steps.map((step) => (
-            <li key={step.key} className="flex min-w-0 items-start gap-2">
-              {step.status === 'running' ? (
-                <Loader2 size={11} className="mt-0.5 shrink-0 animate-spin" />
-              ) : step.status === 'failed' ? (
-                <X size={11} className="mt-0.5 shrink-0 text-[var(--danger)]" />
-              ) : (
-                <Check size={11} className="mt-0.5 shrink-0 text-[var(--success)]" />
-              )}
-              <span className="min-w-0 break-words">
-                {step.label}{step.count > 1 ? ` ×${step.count}` : ''}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : null}
-    </section>
-  );
-}
-
-function useActivityNow(running: boolean): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
-  return now;
-}
 
 /** 流式事件已在 store 按视觉帧合并；这里直接渲染最新快照。 */
 const StableMarkdownBlock = memo(function StableMarkdownBlock({ content }: { content: string }) {
@@ -2426,7 +2360,7 @@ function ComposerSelectionChip({ context, lines = null, onClear }: {
   );
 }
 
-/** 绑定的本地目录是会话级持续上下文；每轮由 Hermes 原生 folder attach 读取。 */
+/** 绑定的本地目录是任务级持续上下文；每轮由 Hermes 原生 folder attach 读取。 */
 function ComposerWorkspaceChip({
   root,
   onClear,
@@ -2453,7 +2387,7 @@ function ComposerWorkspaceChip({
   );
 }
 
-/** 权限是会话级控制，固定放在 Composer 底栏加号之后。 */
+/** 权限是任务级控制，固定放在 Composer 底栏加号之后。 */
 function ComposerPermissionControl({
   value,
   onChange,
@@ -2485,7 +2419,7 @@ function ComposerPermissionControl({
         className={`inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-xs font-medium transition-colors hover:bg-[var(--bg-sunken)] disabled:pointer-events-none disabled:opacity-40 ${tone}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="当前会话的权限模式"
+        title="当前任务的权限模式"
       >
         <ShieldAlert size={13} />
         <span>{active.label}</span>
@@ -2648,13 +2582,13 @@ function CapabilityMasterRow({ active, title, subtitle, badges, toggle, onClick 
   onClick: () => void;
 }) {
   return (
-    <button type="button" onClick={onClick} className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition ${active ? 'bg-[var(--accent-subtle)] text-[var(--text-primary)]' : 'hover:bg-[var(--bg-sunken)] text-[var(--text-secondary)]'}`}>
-      <div className="min-w-0 flex-1">
+    <div className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition ${active ? 'bg-[var(--accent-subtle)] text-[var(--text-primary)]' : 'hover:bg-[var(--bg-sunken)] text-[var(--text-secondary)]'}`}>
+      <button type="button" onClick={onClick} aria-pressed={active} className="min-w-0 flex-1 text-left">
         <div className="flex min-w-0 items-center gap-1.5"><span className="truncate text-xs font-medium">{title}</span>{badges}</div>
         {subtitle && <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{subtitle}</div>}
-      </div>
+      </button>
       {toggle ?? <ChevronRight size={12} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />}
-    </button>
+    </div>
   );
 }
 
@@ -2669,7 +2603,7 @@ function CapabilitySearch({ value, onChange, placeholder }: { value: string; onC
 }
 
 /** Runtime 同源的能力控制面：主从浏览，写操作只调用正式接口。 */
-export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTab, onRefresh, onReconnect, onClose, embedded = false, showTabs = true }: {
+export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTab, onRefresh, onReconnect, onClose, embedded = false, showTabs = true, searchQuery, initialSelection }: {
   snapshot: HermesCapabilities | null;
   error: string | null;
   connStatus: HermesConnectionStatus;
@@ -2680,10 +2614,13 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
   onClose?: () => void;
   embedded?: boolean;
   showTabs?: boolean;
+  searchQuery?: string;
+  initialSelection?: string;
 }) {
   const [busyName, setBusyName] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const [localQuery, setQuery] = useState('');
+  const query = searchQuery ?? localQuery;
   const [selectedSkill, setSelectedSkill] = useState('');
   const [selectedToolset, setSelectedToolset] = useState('');
   const [selectedMcp, setSelectedMcp] = useState('');
@@ -2697,6 +2634,8 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
   const [catalog, setCatalog] = useState<HermesMcpCatalog | null>(null);
   const [catalogEnv, setCatalogEnv] = useState<Record<string, string>>({});
   const [hubQuery, setHubQuery] = useState('');
+  const [submittedHubQuery, setSubmittedHubQuery] = useState('');
+  const effectiveHubQuery = searchQuery ?? submittedHubQuery;
   const [hub, setHub] = useState<HermesHubPage | null>(null);
   const [hubLoading, setHubLoading] = useState(false);
   const [hubPreview, setHubPreview] = useState<HermesHubPreview | null>(null);
@@ -2713,18 +2652,36 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
 
   useEffect(() => { setQuery(''); }, [tab]);
   useEffect(() => {
-    if (tab !== 'hub' || hub) return;
-    setHubLoading(true);
-    hermesSkillsHub('', 1).then(setHub).catch((reason) => setActionError(String(reason))).finally(() => setHubLoading(false));
-  }, [hub, tab]);
+    if (!initialSelection) return;
+    setSelectedSkill(initialSelection);
+    setSelectedToolset(initialSelection);
+    setSelectedMcp(initialSelection);
+  }, [initialSelection]);
+  useEffect(() => {
+    if (tab !== 'hub' || connStatus !== 'connected') return;
+    let cancelled = false;
+    let deadline: ReturnType<typeof window.setTimeout> | undefined;
+    setHubLoading(true); setActionError(null); setHubPreview(null);
+    const timer = window.setTimeout(() => {
+      deadline = window.setTimeout(() => {
+        cancelled = true;
+        setHub(null); setHubLoading(false); setActionError('资源广场搜索超时，请刷新重试。');
+      }, 30_000);
+      hermesSkillsHub(effectiveHubQuery, 1)
+        .then((page) => { if (!cancelled) setHub(page); })
+        .catch((reason) => { if (!cancelled) { setHub(null); setActionError(String(reason)); } })
+        .finally(() => { window.clearTimeout(deadline); if (!cancelled) setHubLoading(false); });
+    }, searchQuery === undefined ? 0 : 350);
+    return () => { cancelled = true; window.clearTimeout(timer); window.clearTimeout(deadline); };
+  }, [effectiveHubQuery, tab, connStatus, searchQuery, snapshot]);
   useEffect(() => {
     if (tab !== 'mcp' || mcpMode !== 'catalog' || catalog) return;
     hermesMcpCatalog().then(setCatalog).catch((reason) => setActionError(String(reason)));
   }, [catalog, mcpMode, tab]);
 
-  const filteredSkills = useMemo(() => snapshot?.skills.filter((skill) => capabilityMatches(query, skill.name, skill.description, skill.category, skill.provenance, skill.origin)) ?? [], [query, snapshot]);
-  const filteredToolsets = useMemo(() => snapshot?.toolsets.filter((toolset) => capabilityMatches(query, toolset.name, toolset.description, ...toolset.tools)) ?? [], [query, snapshot]);
-  const filteredServers = useMemo(() => snapshot?.mcpServers.filter((server) => capabilityMatches(query, server.name, server.transport, server.url, server.command, ...server.tools.flatMap((tool) => [tool.name, tool.description]))) ?? [], [query, snapshot]);
+  const filteredSkills = useMemo(() => snapshot?.skills.filter((skill) => capabilityMatches(query, skill.name, skill.description, skill.category, skill.provenance, skill.origin, 'Hermes 技能')) ?? [], [query, snapshot]);
+  const filteredToolsets = useMemo(() => snapshot?.toolsets.filter((toolset) => capabilityMatches(query, toolset.name, toolset.description, 'Hermes 工具', ...toolset.tools, ...snapshot.tools.filter((tool) => toolset.tools.includes(tool.name)).map((tool) => tool.description))) ?? [], [query, snapshot]);
+  const filteredServers = useMemo(() => snapshot?.mcpServers.filter((server) => capabilityMatches(query, server.name, server.transport, 'Hermes MCP 配置', server.url, server.command, ...server.tools.flatMap((tool) => [tool.name, tool.description]))) ?? [], [query, snapshot]);
   const filteredCatalog = useMemo(() => catalog?.entries.filter((entry) => capabilityMatches(query, entry.name, entry.description, entry.source, entry.transport, ...entry.requiredEnv.map((item) => item.name))) ?? [], [catalog, query]);
   const activeSkill = filteredSkills.find((item) => item.name === selectedSkill) ?? filteredSkills[0] ?? null;
   const activeToolset = filteredToolsets.find((item) => item.name === selectedToolset) ?? filteredToolsets[0] ?? null;
@@ -2776,7 +2733,7 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
     throw new Error('MCP OAuth 授权等待超时');
   });
   const manageBrowser = (action: 'connect' | 'disconnect') => runAction(`browser:${action}`, async () => { await hermesBrowserManage(action); onRefresh(); });
-  const searchHub = () => { setHubLoading(true); setActionError(null); setHubPreview(null); hermesSkillsHub(hubQuery, 1).then(setHub).catch((reason) => setActionError(String(reason))).finally(() => setHubLoading(false)); };
+  const searchHub = () => setSubmittedHubQuery(hubQuery);
   const openSkillEditor = (name: string) => runAction(`skill:edit:${name}`, async () => {
     const document = await hermesSkillDocument(name);
     setSkillEditor(document);
@@ -2814,19 +2771,19 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
   const toolPane = (
     <div className="grid h-full min-h-0 grid-cols-[minmax(150px,0.9fr)_minmax(190px,1.1fr)]">
       <div className="min-h-0 overflow-y-auto border-r border-[var(--border-default)] p-2">
-        <p className="px-2 pb-1 text-xs text-[var(--text-tertiary)]">Toolset 与执行能力</p>
+        <p className="px-2 pb-1 text-xs text-[var(--text-tertiary)]">工具集与执行能力</p>
         {filteredToolsets.map((toolset) => <CapabilityMasterRow key={toolset.name} active={activeToolset?.name === toolset.name} title={toolset.name === 'computer_use' ? '电脑操作' : toolset.name} subtitle={toolset.description} toggle={<div className="flex items-center gap-1"><span className="text-xs text-[var(--text-tertiary)]">×{toolset.usage || 0}</span><CapabilitySwitch checked={toolset.enabled} disabled={busyName === `tool:${toolset.name}`} onChange={(enabled) => void runAction(`tool:${toolset.name}`, async () => { await hermesToolsetSetEnabled(toolset.name, enabled); onRefresh(); })} /></div>} onClick={() => setSelectedToolset(toolset.name)} />)}
         {snapshot && filteredToolsets.length === 0 && <CapabilitySearchEmpty query={query} label="Toolset" />}
       </div>
       <div className="min-h-0 overflow-y-auto p-4">
-        {activeToolset ? <><h3 className="text-sm font-semibold text-[var(--text-primary)]">{activeToolset.name}</h3><p className="mt-1 text-xs leading-relaxed text-[var(--text-tertiary)]">{activeToolset.description}</p>{activeToolset.tools.length > 0 && <div className="mt-3 flex flex-wrap gap-1">{activeToolset.tools.map((name) => <span key={name} className="rounded bg-[var(--bg-sunken)] px-1.5 py-1 font-mono text-xs text-[var(--text-tertiary)]">{name}</span>)}</div>}{activeToolset.name === 'computer_use' && <div className="mt-4"><ComputerUsePanel enabled={activeToolset.enabled} supported onRefresh={onRefresh} /></div>}{activeToolset.name === 'terminal' && snapshot && <div className="mt-5"><div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-semibold text-[var(--text-secondary)]">Execution backend</h4><button type="button" onClick={onRefresh} className="text-xs text-[var(--text-tertiary)]">刷新探测</button></div><div className="space-y-1.5">{snapshot.terminalBackends.backends.map((backend) => <button type="button" key={backend.name} disabled={busyName === `terminal:${backend.name}`} onClick={() => void runAction(`terminal:${backend.name}`, async () => { await hermesTerminalBackendSelect(backend.name); onRefresh(); })} className={`w-full rounded-lg border px-2.5 py-2 text-left ${backend.active ? 'border-[var(--accent-border)] bg-[var(--accent-subtle)]' : 'border-transparent bg-[var(--bg-sunken)] hover:border-[var(--border-default)]'}`}><span className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-medium text-[var(--text-secondary)]">{backend.label}</span><span className={`rounded px-1 py-0.5 text-xs ${backend.status === 'ready' ? 'bg-[var(--success-subtle)] text-[var(--success)]' : 'bg-[var(--warning-subtle)] text-[var(--warning)]'}`}>{backend.status === 'ready' ? 'Ready' : 'Needs setup'}</span>{backend.active && <span className="rounded bg-[var(--accent-subtle)] px-1 py-0.5 text-xs text-[var(--accent)]">In use</span>}</span><span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{backend.description}</span>{backend.detail && <span className="mt-1 flex items-start gap-1 text-xs text-[var(--warning)]"><AlertTriangle size={9} className="mt-0.5 shrink-0" />{backend.detail}</span>}</button>)}</div></div>}</> : <CapabilitySearchEmpty query={query} label="Toolset" />}
+        {activeToolset ? <><h3 className="text-sm font-semibold text-[var(--text-primary)]">{activeToolset.name}</h3><p className="mt-1 text-xs leading-relaxed text-[var(--text-tertiary)]">{activeToolset.description}</p>{activeToolset.tools.length > 0 && <div className="mt-3 flex flex-wrap gap-1">{activeToolset.tools.map((name) => <span key={name} className="rounded bg-[var(--bg-sunken)] px-1.5 py-1 font-mono text-xs text-[var(--text-tertiary)]">{name}</span>)}</div>}{activeToolset.name === 'computer_use' && <div className="mt-4"><ComputerUsePanel enabled={activeToolset.enabled} supported onRefresh={onRefresh} /></div>}{activeToolset.name === 'terminal' && snapshot && <div className="mt-5"><div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-semibold text-[var(--text-secondary)]">执行环境</h4><button type="button" onClick={onRefresh} className="text-xs text-[var(--text-tertiary)]">刷新探测</button></div><div className="space-y-1.5">{snapshot.terminalBackends.backends.map((backend) => <button type="button" key={backend.name} disabled={busyName === `terminal:${backend.name}`} onClick={() => void runAction(`terminal:${backend.name}`, async () => { await hermesTerminalBackendSelect(backend.name); onRefresh(); })} className={`w-full rounded-lg border px-2.5 py-2 text-left ${backend.active ? 'border-[var(--accent-border)] bg-[var(--accent-subtle)]' : 'border-transparent bg-[var(--bg-sunken)] hover:border-[var(--border-default)]'}`}><span className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-medium text-[var(--text-secondary)]">{backend.label}</span><span className={`rounded px-1 py-0.5 text-xs ${backend.status === 'ready' ? 'bg-[var(--success-subtle)] text-[var(--success)]' : 'bg-[var(--warning-subtle)] text-[var(--warning)]'}`}>{backend.status === 'ready' ? '可用' : '待配置'}</span>{backend.active && <span className="rounded bg-[var(--accent-subtle)] px-1 py-0.5 text-xs text-[var(--accent)]">使用中</span>}</span><span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">{backend.description}</span>{backend.detail && <span className="mt-1 flex items-start gap-1 text-xs text-[var(--warning)]"><AlertTriangle size={9} className="mt-0.5 shrink-0" />{backend.detail}</span>}</button>)}</div></div>}</> : <CapabilitySearchEmpty query={query} label="Toolset" />}
       </div>
     </div>
   );
 
   const mcpPane = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-3 border-b border-[var(--border-default)] px-3"><button type="button" onClick={() => setMcpMode('servers')} className={`text-xs ${mcpMode === 'servers' ? 'font-semibold text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]'}`}>Servers</button><button type="button" onClick={() => setMcpMode('catalog')} className={`text-xs ${mcpMode === 'catalog' ? 'font-semibold text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]'}`}>Catalog</button>{mcpMode === 'servers' && <button type="button" onClick={() => setMcpAddOpen((open) => !open)} className="ml-auto text-xs text-[var(--accent)]"><Plus size={10} className="mr-1 inline" />新增</button>}</div>
+      <div className="flex h-8 shrink-0 items-center gap-3 border-b border-[var(--border-default)] px-3"><button type="button" onClick={() => setMcpMode('servers')} className={`text-xs ${mcpMode === 'servers' ? 'font-semibold text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]'}`}>已配置服务</button><button type="button" onClick={() => setMcpMode('catalog')} className={`text-xs ${mcpMode === 'catalog' ? 'font-semibold text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]'}`}>服务目录</button>{mcpMode === 'servers' && <button type="button" onClick={() => setMcpAddOpen((open) => !open)} className="ml-auto text-xs text-[var(--accent)]"><Plus size={10} className="mr-1 inline" />新增</button>}</div>
       {mcpAddOpen && <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-sunken)] p-3 space-y-2"><input value={mcpDraft.name} onChange={(event) => setMcpDraft((draft) => ({ ...draft, name: event.target.value }))} placeholder="Server 名称" className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 text-xs outline-none" /><div className="flex gap-1">{(['http', 'stdio'] as const).map((transport) => <button type="button" key={transport} onClick={() => setMcpDraft((draft) => ({ ...draft, transport, auth: transport === 'stdio' ? 'none' : draft.auth }))} className={`rounded border px-2 py-1 text-xs ${mcpDraft.transport === transport ? 'border-[var(--accent-border)] text-[var(--accent)]' : 'border-[var(--border-default)] text-[var(--text-tertiary)]'}`}>{transport}</button>)}</div>{mcpDraft.transport === 'http' ? <><input value={mcpDraft.url} onChange={(event) => setMcpDraft((draft) => ({ ...draft, url: event.target.value }))} placeholder="https://example.com/mcp" className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 text-xs outline-none" /><select value={mcpDraft.auth} onChange={(event) => setMcpDraft((draft) => ({ ...draft, auth: event.target.value as HermesMcpServerCreate['auth'], bearerToken: '' }))} className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 text-xs"><option value="none">无需认证</option><option value="header">Bearer Token</option><option value="oauth">OAuth 2.1</option></select>{mcpDraft.auth === 'header' && <input type="password" autoComplete="off" value={mcpDraft.bearerToken} onChange={(event) => setMcpDraft((draft) => ({ ...draft, bearerToken: event.target.value }))} placeholder="Token 仅提交给 Hermes" className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 text-xs outline-none" />}</> : <><input value={mcpDraft.command} onChange={(event) => setMcpDraft((draft) => ({ ...draft, command: event.target.value }))} placeholder="命令，如 npx" className="w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 text-xs outline-none" /><textarea value={mcpArgsDraft} onChange={(event) => setMcpArgsDraft(event.target.value)} placeholder="参数，每行一个" className="min-h-12 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 font-mono text-xs outline-none" /><textarea value={mcpEnvDraft} onChange={(event) => setMcpEnvDraft(event.target.value)} placeholder="环境变量，每行 KEY=VALUE" className="min-h-12 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2 py-1.5 font-mono text-xs outline-none" /></>}<div className="flex justify-end gap-1"><button type="button" onClick={() => setMcpAddOpen(false)} className="px-2 py-1 text-xs text-[var(--text-tertiary)]">取消</button><button type="button" onClick={() => void saveMcp()} disabled={busyName === 'mcp:add'} className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white">保存并连接</button></div></div>}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(140px,0.85fr)_minmax(200px,1.15fr)]">
         <div className="min-h-0 overflow-y-auto border-r border-[var(--border-default)] p-2">{mcpMode === 'servers' ? filteredServers.map((server) => <CapabilityMasterRow key={server.name} active={activeMcp?.name === server.name} title={server.name} subtitle={`${server.transport} · ${server.tools.length} tools`} badges={<span className={`size-1.5 rounded-full ${server.enabled ? 'bg-[var(--success)]' : 'bg-[var(--border-strong)]'}`} />} toggle={<CapabilitySwitch checked={server.enabled} disabled={server.name === 'sophonote-bridge' || Boolean(busyName?.includes(server.name))} onChange={(enabled) => void runAction(`mcp:toggle:${server.name}`, async () => { await hermesMcpSetEnabled(server.name, enabled); onRefresh(); })} />} onClick={() => setSelectedMcp(server.name)} />) : filteredCatalog.map((entry) => <CapabilityMasterRow key={entry.name} active={activeCatalog?.name === entry.name} title={entry.name} subtitle={entry.description} badges={entry.installed ? <span className="rounded bg-[var(--success-subtle)] px-1 py-0.5 text-xs text-[var(--success)]">installed</span> : undefined} onClick={() => setSelectedCatalog(entry.name)} />)}{mcpMode === 'servers' && snapshot && filteredServers.length === 0 && <CapabilitySearchEmpty query={query} label="MCP Server" />}</div>
@@ -2837,16 +2794,16 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
 
   const hubPane = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 px-4 pt-3 pb-2"><span className="text-xs text-[var(--text-tertiary)]">Connected hubs:</span><div className="mt-1.5 flex flex-wrap gap-1">{snapshot?.hubSources.sources.map((source) => <span key={source.id} className={`rounded px-1.5 py-0.5 text-xs ${(source.available === false || source.rateLimited) ? 'bg-[var(--warning-subtle)] text-[var(--warning)]' : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'}`}>{source.label}</span>)}</div></div>
-      <div className="shrink-0 border-y border-[var(--border-default)] px-3"><label className="flex items-center gap-2"><Search size={12} className="text-[var(--text-tertiary)]" /><input value={hubQuery} onChange={(event) => setHubQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchHub(); }} placeholder="搜索 Skills Hub" className="min-w-0 flex-1 py-2.5 text-xs outline-none" />{hubQuery && <button type="button" onClick={() => setHubQuery('')} className="text-[var(--text-tertiary)]"><X size={11} /></button>}</label></div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">{hubLoading ? <p className="py-4 text-center text-xs text-[var(--text-tertiary)]">正在检索连接的 Hub…</p> : hub?.items.length ? <><p className="pb-1 text-xs text-[var(--text-tertiary)]">{hub.total} results</p>{hub.items.map((skill) => <div key={skill.identifier || skill.name} className="flex items-start gap-2 border-b border-[var(--border-default)] py-2"><div className="min-w-0 flex-1"><div className="flex items-center gap-1"><span className="text-xs font-medium text-[var(--text-secondary)]">{skill.name}</span><span className="rounded bg-[var(--warning-subtle)] px-1 py-0.5 text-xs text-[var(--warning)]">{skill.trust || skill.source || 'community'}</span></div><p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-[var(--text-tertiary)]">{skill.description}</p></div><button type="button" onClick={() => void runAction(`preview:${skill.identifier || skill.name}`, async () => setHubPreview(await hermesSkillHubPreview(skill.identifier || skill.name)))} className="shrink-0 px-1 py-1 text-xs text-[var(--text-tertiary)]">Preview</button><button type="button" disabled={busyName === `install:${skill.identifier || skill.name}`} onClick={() => void runAction(`install:${skill.identifier || skill.name}`, async () => { await hermesSkillInstall(skill.identifier || skill.name); onRefresh(); })} className="shrink-0 px-1 py-1 text-xs font-medium text-[var(--text-secondary)]">Install</button></div>)}</> : <p className="py-8 text-center text-xs text-[var(--text-tertiary)]">输入关键词检索连接的 Skills Hub。</p>}</div>
+      <div className="shrink-0 px-4 pt-3 pb-2"><span className="text-xs text-[var(--text-tertiary)]">资源来源：</span><div className="mt-1.5 flex flex-wrap gap-1">{snapshot?.hubSources.sources.map((source) => <span key={source.id} className={`rounded px-1.5 py-0.5 text-xs ${(source.available === false || source.rateLimited) ? 'bg-[var(--warning-subtle)] text-[var(--warning)]' : 'bg-[var(--bg-sunken)] text-[var(--text-tertiary)]'}`}>{source.label}</span>)}</div></div>
+      {searchQuery === undefined && <div className="shrink-0 border-y border-[var(--border-default)] px-3"><label className="flex items-center gap-2"><Search size={12} className="text-[var(--text-tertiary)]" /><input value={hubQuery} onChange={(event) => setHubQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchHub(); }} placeholder="搜索资源广场" className="min-w-0 flex-1 py-2.5 text-xs outline-none" />{hubQuery && <button type="button" onClick={() => { setHubQuery(''); setSubmittedHubQuery(''); }} className="text-[var(--text-tertiary)]"><X size={11} /></button>}</label></div>}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">{hubLoading ? <p className="py-4 text-center text-xs text-[var(--text-tertiary)]">正在检索连接的 Hub…</p> : hub?.items.length ? <><p className="pb-1 text-xs text-[var(--text-tertiary)]">{hub.total} 项结果</p>{hub.items.map((skill) => <div key={skill.identifier || skill.name} className="flex items-start gap-2 border-b border-[var(--border-default)] py-2"><div className="min-w-0 flex-1"><div className="flex items-center gap-1"><span className="text-xs font-medium text-[var(--text-secondary)]">{skill.name}</span><span className="rounded bg-[var(--warning-subtle)] px-1 py-0.5 text-xs text-[var(--warning)]">{skill.trust || skill.source || 'community'}</span></div><p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-[var(--text-tertiary)]">{skill.description}</p></div><button type="button" onClick={() => void runAction(`preview:${skill.identifier || skill.name}`, async () => setHubPreview(await hermesSkillHubPreview(skill.identifier || skill.name)))} className="shrink-0 px-1 py-1 text-xs text-[var(--text-tertiary)]">预览</button><button type="button" disabled={busyName === `install:${skill.identifier || skill.name}`} onClick={() => void runAction(`install:${skill.identifier || skill.name}`, async () => { await hermesSkillInstall(skill.identifier || skill.name); onRefresh(); })} className="shrink-0 px-1 py-1 text-xs font-medium text-[var(--text-secondary)]">安装到 Hermes</button></div>)}</> : <p className="py-8 text-center text-xs text-[var(--text-tertiary)]">输入关键词检索连接的 Skills Hub。</p>}</div>
       {hubPreview && <div className="absolute inset-6 z-30 flex min-h-0 flex-col rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)]"><header className="flex items-start gap-2 border-b border-[var(--border-default)] p-3"><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">{hubPreview.name}</h3><p className="truncate text-xs text-[var(--text-tertiary)]">{hubPreview.identifier}</p></div><button type="button" onClick={() => setHubPreview(null)} className="text-[var(--text-tertiary)]"><X size={13} /></button></header><div className="min-h-0 flex-1 overflow-y-auto p-4"><p className="text-xs text-[var(--text-tertiary)]">{hubPreview.description}</p><pre className="mt-3 whitespace-pre-wrap rounded-[6px] bg-[var(--bg-sunken)] p-3 font-mono text-[13px] leading-relaxed text-[var(--text-secondary)]">{hubPreview.skillMd}</pre></div></div>}
     </div>
   );
 
   return (
     <div className={embedded
-      ? 'relative flex min-h-[680px] flex-col overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]'
+      ? 'relative flex h-[560px] min-h-[400px] flex-col overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]'
       : 'absolute inset-0 z-20 flex flex-col bg-[var(--bg-surface)]'}>
       <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-[var(--border-default)] px-3"><ActiveCapabilityIcon size={13} className="text-[var(--accent)]" /><span className="text-xs font-semibold text-[var(--text-primary)]">{activeMenuItem.label}</span>
         {connStatus === 'connected' && <span className="ml-1 flex items-center gap-1 text-xs text-[var(--success)]"><span className="size-1.5 rounded-full bg-[var(--success)]" />已连接</span>}
@@ -2857,7 +2814,7 @@ export function HermesCapabilitiesPanel({ snapshot, error, connStatus, tab, onTa
         {onClose && <button type="button" onClick={onClose} title="关闭" className="flex size-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]"><X size={13} /></button>}
       </header>
       {showTabs && <nav className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-default)] px-2">{tabs.map(([key, label]) => <button type="button" key={key} onClick={() => onTab(key)} className={`shrink-0 rounded-md px-2 py-1 text-xs ${tab === key ? 'bg-[var(--bg-sunken)] font-medium text-[var(--text-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'}`}>{label}</button>)}</nav>}
-      {tab !== 'hub' && <CapabilitySearch value={query} onChange={setQuery} placeholder={`检索 ${tab === 'skills' ? 'Skills' : tab === 'tools' ? 'Tools' : mcpMode === 'servers' ? 'MCP Servers' : 'MCP Catalog'}`} />}
+      {tab !== 'hub' && searchQuery === undefined && <CapabilitySearch value={query} onChange={setQuery} placeholder={`检索 ${tab === 'skills' ? 'Skills' : tab === 'tools' ? 'Tools' : mcpMode === 'servers' ? 'MCP Servers' : 'MCP Catalog'}`} />}
       {(error || actionError) && <div className="mx-3 mt-2 shrink-0 rounded-lg border border-[var(--danger)] bg-[var(--danger-subtle)] px-3 py-2 text-xs text-[var(--danger)] break-all">{actionError ?? error}{connStatus === 'disconnected' && <button type="button" onClick={onReconnect} className="ml-2 rounded border border-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-subtle)]">重连 Hermes</button>}</div>}
       {connStatus === 'restarting' && !error && <div className="mx-3 mt-2 shrink-0 rounded-lg border border-[var(--gold-border)] bg-[var(--warning-subtle)] px-3 py-2 text-xs text-[var(--warning)]">正在重启 Hermes Runtime，请稍候…</div>}
       <div className="relative min-h-0 flex-1">{!snapshot && !error ? <p className="p-4 text-xs text-[var(--text-tertiary)]">正在读取 Hermes Runtime…</p> : connStatus === 'restarting' && !snapshot ? <p className="p-4 text-xs text-[var(--warning)]">Hermes 正在重连，能力面板将在恢复后自动刷新…</p> : tab === 'skills' ? skillPane : tab === 'tools' ? toolPane : tab === 'mcp' ? mcpPane : hubPane}</div>
@@ -3147,7 +3104,7 @@ function ConversationFindBar({
         autoFocus
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
-        placeholder="查找会话"
+        placeholder="查找任务"
         className="h-7 w-40 bg-transparent text-xs text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-disabled)]"
       />
       <span className="min-w-[3.5rem] text-center text-[10px] tabular-nums text-[var(--text-tertiary)]">

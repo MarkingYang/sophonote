@@ -1015,11 +1015,11 @@ export default function DocWorkspace({
           </span>
         </div>
       ) : (
-      <div className="w-72 border-r border-[var(--border-default)] bg-[var(--bg-sunken)] flex flex-col shrink-0">
+      <div className="sn-workspace-sidebar sn-note-sidebar border-r border-[var(--border-default)] bg-[var(--bg-sunken)] flex flex-col shrink-0">
         {/* NB-15 首行：统一 h-10 与侧栏首行（红绿灯行）同高对齐，标题 + 折叠钮（规格与侧栏一致 w-7/icon15） */}
         <div className="h-10 border-b border-[var(--border-default)] flex items-center justify-between px-3 shrink-0" data-tauri-drag-region>
           {/* NB-20：drag-region 按事件 target 匹配，标题文字本身也要挂属性才可拖 */}
-          <h3 className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider" data-tauri-drag-region>{listTitle}</h3>
+          <h3 className="text-xs font-semibold text-[var(--text-secondary)]" data-tauri-drag-region>{listTitle}<span className="ml-2 font-normal tabular-nums text-[var(--text-tertiary)]">{listDocs.length}</span></h3>
           <button
             onClick={toggleListCollapsed}
             title="折叠列表"
@@ -1171,7 +1171,7 @@ export default function DocWorkspace({
             </div>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1" data-perf-scroll="doc-list">
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-1" data-perf-scroll="doc-list">
           {listDocs.length === 0 && (
             <p className="text-xs text-[var(--text-tertiary)] text-center py-10 px-4">
               {journal && selectedDate ? `${selectedDate} 暂无笔记` : emptyHint}
@@ -1188,8 +1188,8 @@ export default function DocWorkspace({
             const hits = sq ? countMatches(a.content, sq) : 0;
             const sctx = sq && hits > 0 ? firstMatchContext(a.content, sq) : null;
             const metaLine = (
-              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                <span className={`text-xs px-1.5 py-0.5 rounded-[6px] ${badge.cls}`}>{badge.text}</span>
+              <div className="sn-note-meta">
+                <span className="sn-note-kind">{badge.text}</span>
                 {a.edited && (
                   <span className="text-xs px-1.5 py-0.5 rounded-[6px] bg-[var(--warning-subtle)] text-[var(--warning)]">已编辑</span>
                 )}
@@ -1199,8 +1199,8 @@ export default function DocWorkspace({
                 {tags.map((t) => (
                   <span key={t} className="text-xs text-[var(--accent)]">#{t}</span>
                 ))}
-                <span className="text-xs text-[var(--text-tertiary)]">
-                  {new Date(a.createdAt).toLocaleDateString('zh-CN')}
+                <span className="sn-note-date">
+                  {new Date(a.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
                 </span>
               </div>
             );
@@ -1238,15 +1238,16 @@ export default function DocWorkspace({
                 key={a.id}
                 onClick={(e) => void handleListClick(e, a)}
                 onContextMenu={(e) => openDocMenu(e, a)}
-                className={`w-full text-left p-3 rounded-lg transition-colors ${
+                aria-current={selected?.id === a.id ? 'page' : undefined}
+                className={`sn-note-row w-full text-left ${
                   batchIds.has(a.id)
-                    ? 'bg-[var(--accent-subtle)] ring-1 ring-[var(--accent-border)]'
+                    ? 'is-batch-selected'
                     : selected?.id === a.id
-                      ? 'bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]'
-                      : 'hover:bg-[var(--bg-surface)]'
+                      ? 'is-selected'
+                      : ''
                 }`}
               >
-                <p className="text-[13px] font-medium text-[var(--text-primary)] line-clamp-2">
+                <p className="text-[13px] leading-5 font-medium text-[var(--text-primary)] line-clamp-2">
                   <SearchHighlight text={a.title} query={sq} />
                 </p>
                 {sctx && (
@@ -1438,8 +1439,8 @@ export default function DocWorkspace({
                 markdown: wbRef.current?.getLiveMarkdown() ?? doc.content ?? '',
               };
             }}
-            emptyHint="选中笔记内容并点击“加入会话”，让 Hermes 基于明确范围继续处理。"
-            composerPlaceholder={chatSelection ? '对选中内容下指令…' : '向 Hermes 提问，或先选中一段笔记…'}
+            emptyHint="直接描述要写的笔记，内容会提交到左侧审阅；也可以选中一段文字限定修改范围。"
+            composerPlaceholder={chatSelection ? '对选中内容下指令…' : '描述要写的笔记，或就当前文档提问…'}
           />
         </aside>
       )}

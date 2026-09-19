@@ -6,14 +6,13 @@
     <title>SophoNote — 让信息变成工作，让工作沉淀为知识</title>
     <meta
       name="description"
-      content="SophoNote 是面向知识工作者的 macOS 本地优先 AI 工作台：自由选择 Hermes、Pi 或 Claude Code，共用模型配置与会话界面，把信息沉淀为 Markdown 和项目成果。"
+      content="SophoNote 是面向知识工作者的 macOS 本地优先 AI 工作台：自由选择 Hermes、Pi、Claude Code 或 OpenCode，共用模型配置与会话界面，把信息沉淀为 Markdown 和项目成果。"
     />
     <meta name="theme-color" content="#f5f0e8" />
     <meta name="color-scheme" content="light" />
     <link rel="canonical" href="https://sophonote.com/" />
     <link rel="icon" type="image/png" href="assets/favicon.png" />
     <link rel="stylesheet" href="styles.css" />
-    <meta name="theme-color" content="#f5f0e8" />
     <noscript><style>.reveal { opacity: 1; transform: none; }</style></noscript>
 
     <meta property="og:type" content="website" />
@@ -22,7 +21,7 @@
     <meta property="og:title" content="SophoNote — 让信息变成工作，让工作沉淀为知识" />
     <meta
       property="og:description"
-      content="Hermes、Pi、Claude Code 三种引擎自由选择，共用模型配置、会话界面与文档审阅，连接发现、笔记和项目工作。"
+      content="Hermes、Pi、Claude Code、OpenCode 四种引擎自由选择，共用模型配置、会话界面与文档审阅，连接发现、笔记和项目工作。"
     />
     <meta property="og:url" content="https://sophonote.com/" />
     <meta property="og:image" content="https://sophonote.com/assets/brand-overview.png" />
@@ -41,16 +40,15 @@
         <nav class="desktop-nav" aria-label="主要导航">
           <a href="#workflow">工作方式</a>
           <a href="#product">产品能力</a>
-          <a href="#principles">产品原则</a>
+          <a href="#memory">云端记忆</a>
           <a href="#open-source">开源</a>
         </nav>
         <div class="nav-actions">
           <a class="text-link desktop-only" href="https://github.com/MarkingYang/sophonote">GitHub</a>
           <a
             class="button button-small button-ink"
-            href="https://github.com/MarkingYang/sophonote/releases"
-            data-release-link
-          >获取 macOS 版</a>
+            href="#download"
+          >下载预览版</a>
         </div>
       </div>
     </header>
@@ -60,11 +58,11 @@
         <div class="hero-glow" aria-hidden="true"></div>
         <div class="shell hero-grid">
           <div class="hero-copy reveal">
-            <p class="kicker"><span></span>开源 · 本地优先 · macOS 社区预览</p>
+            <p class="kicker"><span></span>开源 · 本地优先 · 四引擎工作台</p>
             <h1>让信息变成工作，<br /><em>让工作沉淀为知识。</em></h1>
             <p class="hero-lead">
-              在 Hermes、Pi、Claude Code 之间选择适合任务的引擎，共用一套模型配置与会话界面。
-              从发现信息到整理 Markdown、推进本地项目，让每一次工作都有可留下的成果。
+              在 Hermes、Pi、Claude Code、OpenCode 之间选择适合任务的引擎，共用一套模型配置与会话界面。
+              从项目任务到 Markdown 笔记，再到可查看、可修改的云端记忆，让工作接得上，也留得下。
             </p>
             <div class="hero-actions">
               <a
@@ -75,12 +73,12 @@
               <a class="arrow-link" href="#workflow">看看它如何工作 <span aria-hidden="true">↘</span></a>
             </div>
             <p class="release-note" data-release-status aria-live="polite">
-              正在检查 GitHub 上的最新 DMG…
+              macOS Apple Silicon · 社区预览 · 查看 GitHub 下载与版本说明
             </p>
             <ul class="hero-facts" aria-label="产品特点">
               <li>Markdown 正文在本机</li>
               <li>AI 修改先审 Diff</li>
-              <li>三种 Agent 引擎可切换</li>
+              <li>四种 Agent 引擎可切换</li>
             </ul>
           </div>
 
@@ -129,8 +127,8 @@
               </div>
             </article>
             <div class="hero-caption">
-              <span>不是聊天框套壳</span>
-              <p>作用域、过程、证据和修改决定都在同一工作现场。</p>
+              <span>工作流程示意</span>
+              <p>同一任务里查看过程、阅读结果、审阅笔记修改。</p>
             </div>
           </div>
         </div>
@@ -138,9 +136,9 @@
 
       <section class="signal-strip" aria-label="产品定位">
         <div class="shell signal-grid">
-          <p><strong>一个工作闭环</strong><span>从发现到行动，不再复制粘贴</span></p>
-          <p><strong>三种执行引擎</strong><span>Hermes · Pi · Claude Code，同一工作界面</span></p>
-          <p><strong>两条安全写路径</strong><span>笔记走 DocumentService，代码走工作区审查</span></p>
+          <p><strong>一个工作闭环</strong><span>发现信息 · 创建任务 · 留下成果</span></p>
+          <p><strong>四种执行引擎</strong><span>Hermes · Pi · Claude Code · OpenCode</span></p>
+          <p><strong>记忆由你掌握</strong><span>按需启用云端记忆，随时查看与修改</span></p>
         </div>
       </section>
 
@@ -157,22 +155,22 @@
               <span class="step-number">01</span>
               <div class="step-icon">⌁</div>
               <h3>发现值得处理的信息</h3>
-              <p>多源信息先经过正文与证据门禁。看见“为什么与你有关”，而不是再多一个未读列表。</p>
+              <p>聚合多源动态、日报与模型榜，阅读 AI 解读与引用来源，把值得继续研究的资料带进任务。</p>
               <small>发现 · 收件箱</small>
             </article>
             <article>
               <span class="step-number">02</span>
               <div class="step-icon">◫</div>
               <h3>交给一次明确的会话</h3>
-              <p>选择 Hermes、Pi 或 Claude Code，把资料、选区或目录显式加入本轮。过程、工具、审批和结果都在同一会话中呈现。</p>
+              <p>选择 Hermes、Pi、Claude Code 或 OpenCode，把资料、选区或目录显式加入本轮。过程、工具、审批和结果都在同一会话中呈现。</p>
               <small>会话 · 引擎选择</small>
             </article>
             <article>
               <span class="step-number">03</span>
               <div class="step-icon">✎</div>
               <h3>沉淀为可继续的成果</h3>
-              <p>日常判断回到 Markdown；项目成果留在真实工作目录。AI 只能提议，最终写入由你决定。</p>
-              <small>笔记本 · 工作室</small>
+              <p>日常判断回到 Markdown；项目成果留在真实工作目录。笔记修改先展示差异，接受后再写入。</p>
+              <small>笔记本 · 项目</small>
             </article>
             <article>
               <span class="step-number">04</span>
@@ -189,7 +187,7 @@
         <div class="shell">
           <header class="section-heading compact reveal">
             <p class="section-index">02 / 产品能力</p>
-            <h2>不是六个页面。<br />是三种关键能力。</h2>
+            <h2>选好引擎，<br />把任务推进到成果。</h2>
           </header>
 
           <div class="capability-stack">
@@ -197,7 +195,7 @@
               <div class="capability-copy">
                 <span class="capability-label">多引擎会话</span>
                 <h3>引擎由你选，<br />工作始终在一处。</h3>
-                <p>在输入框选择 Hermes、Pi 或 Claude Code。三种引擎共用模型设置，流式回复、思考过程、工具活动与结果都在同一界面呈现。</p>
+                <p>在输入框选择 Hermes、Pi、Claude Code 或 OpenCode。四种引擎共用模型设置，流式回复、思考过程、工具活动与结果都在同一界面呈现。</p>
                 <ul>
                   <li>模型配置一次，在引擎支持的协议范围内复用</li>
                   <li>切换已有会话时新建会话，保留历史与未发送内容</li>
@@ -205,7 +203,7 @@
                 </ul>
               </div>
               <div class="conversation-demo" aria-hidden="true">
-                <div class="engine-options"><span>Hermes</span><span class="selected">Pi ✓</span><span>Claude Code</span></div>
+                <div class="engine-options"><span>Hermes</span><span class="selected">Pi ✓</span><span>Claude Code</span><span>OpenCode</span></div>
                 <div class="demo-top"><b>资料对比研究</b><span>Pi · 运行中</span></div>
                 <div class="demo-line done"><i>✓</i><p><b>已阅读 3 份资料</b><small>本轮附件 · 产品说明 · 研究笔记</small></p></div>
                 <div class="demo-line active"><i>2</i><p><b>比较证据</b><small>区分事实、推断与未披露信息</small></p></div>
@@ -224,7 +222,7 @@
                   <p class="diff-add">+ 是否形成可控、可恢复、可验证的工作闭环。</p>
                   <p>这一判断引用了 <u>[E1] 架构说明</u> 与 <u>[E2] 实际运行记录</u>。</p>
                 </div>
-                <div class="review-bar"><span>1 个区域待审阅</span><button>拒绝</button><button>接受</button></div>
+                <div class="review-bar"><span>1 个区域待审阅</span><span class="demo-action">拒绝</span><span class="demo-action accept">接受</span></div>
               </div>
               <div class="capability-copy">
                 <span class="capability-label">书写与审阅</span>
@@ -238,25 +236,37 @@
               </div>
             </article>
 
-            <article class="capability capability-studio reveal">
+            <article class="capability capability-project reveal">
               <div class="capability-copy">
-                <span class="capability-label">项目工作室</span>
-                <h3>让资料、代码、终端、浏览器和 Agent 在同一现场协作。</h3>
-                <p>工作室面向真实本地目录：看文件、编辑代码、审查变更、运行命令并在 Browser 中查看结果。权限模式始终可见。</p>
-                <div class="boundary-note">
-                  <b>边界很重要</b>
-                  <span>普通代码文件由 WorkspaceService 管理；SophoNote 笔记仍只经 DocumentService 写入。</span>
-                </div>
+                <span class="capability-label">项目与任务</span>
+                <h3>一个本地目录，<br />一项持续推进的工作。</h3>
+                <p>选择本地文件夹建立项目。围绕项目创建任务，在多轮对话中补充要求，随时浏览文件并把所需资料加入当前任务。</p>
+                <ul><li>项目首页搜索与排序，快速回到手头工作</li><li>每个项目独立组织任务，保留历史与置顶</li><li>文件按需读取，成果留在真实本地目录</li></ul>
               </div>
-              <div class="studio-demo" aria-hidden="true">
-                <div class="studio-tabs"><span class="on">Explorer</span><span>Search</span><span>Source Control</span></div>
-                <div class="studio-body">
-                  <div class="file-tree"><b>sophonote</b><span>⌄ src</span><span class="selected">&nbsp;&nbsp;Conversation.tsx</span><span>&nbsp;&nbsp;agentStore.ts</span><span>⌄ docs</span><span>&nbsp;&nbsp;PRD.md</span></div>
-                  <div class="code-pane"><small>Conversation.tsx</small><pre><em>42</em> const scope = freezeScope(context)
-<em>43</em> await startRun({ threadId, scope })
-<em>44</em> <mark>// current run stays isolated</mark></pre><div class="terminal"><b>Terminal</b><span>$ pnpm test --run</span><span class="ok">385 tests passed</span></div></div>
+              <div class="project-demo" aria-label="项目与任务界面示意">
+                <div class="demo-top"><b>产品研究</b><span>本地项目</span></div>
+                <div class="project-folder">~/Projects/product-research</div>
+                <div class="project-task"><span class="task-number">01</span><div><b>梳理调研资料</b><small>3 份附件 · Hermes</small></div><span>已完成</span></div>
+                <div class="project-task current"><span class="task-number">02</span><div><b>完善方案初稿</b><small>继续上次讨论 · Claude Code</small></div><span>当前任务</span></div>
+                <div class="project-task"><span class="task-number">03</span><div><b>验证交互原型</b><small>本地代码目录 · OpenCode</small></div><span>待继续</span></div>
+                <p class="demo-caption">项目与任务示意 · 所有名称均为范例</p>
+              </div>
+            </article>
+            <article class="capability capability-memory reveal" id="memory">
+              <div class="memory-demo" aria-label="云端记忆界面示意">
+                <div class="demo-top"><b>云端记忆</b><span>OpenViking</span></div>
+                <div class="memory-layout">
+                  <div class="memory-sources"><small>记忆来源</small><span class="selected">用户记忆 <b>✓</b></span><span>Hermes</span><span>Pi</span><span>Claude Code</span><span>OpenCode</span></div>
+                  <div class="memory-document"><small>preferences.md · 示例</small><h4>工作偏好</h4><p>先给出结论，再补充依据。<br />方案需列明下一步行动。</p><div class="memory-edit">可读取 · 可修改</div></div>
                 </div>
-                <div class="studio-status"><span>main</span><span>Ask before changes</span><span>UTF-8</span></div>
+                <p class="demo-caption">布局示意 · 云端服务需自行配置</p>
+              </div>
+              <div class="capability-copy">
+                <span class="capability-label">可选云端记忆</span>
+                <h3>被记住的内容，<br />也应该看得见。</h3>
+                <p>在「AI 配置 → 记忆」连接你自己的火山引擎 OpenViking 云端服务。浏览公共用户记忆，以及 Hermes、Pi、Claude Code、OpenCode 各自的记忆目录，读取并编辑正文。</p>
+                <ul><li>单列来源导航，清晰切换五类记忆</li><li>启用前确认数据发送范围，随时停用</li><li>云端记忆独立于本地 Markdown 笔记</li></ul>
+                <a class="arrow-link" href="privacy.html">了解云端记忆的数据流 <span aria-hidden="true">↗</span></a>
               </div>
             </article>
           </div>
@@ -293,7 +303,7 @@
           </div>
           <div class="repo-card" aria-label="GitHub 仓库信息">
             <div class="repo-head"><img src="assets/logo-dark.png" alt="" width="48" height="48" /><div><small>MarkingYang /</small><b>sophonote</b></div></div>
-            <p>Local-first AI knowledge workbench for macOS, with your choice of Hermes, Pi, or Claude Code.</p>
+            <p>Local-first AI knowledge workbench for macOS, with your choice of Hermes, Pi, Claude Code, or OpenCode.</p>
             <div class="repo-meta"><span>MIT License</span><span>React + Tauri + Rust</span><span>Chinese UI</span></div>
             <a href="https://github.com/MarkingYang/sophonote">github.com/MarkingYang/sophonote <span>↗</span></a>
           </div>
@@ -313,16 +323,17 @@
           <div class="download-copy reveal">
             <p class="section-index">05 / 获取 SophoNote</p>
             <h2>从下一项真实工作开始。</h2>
-            <p>当前以 macOS Apple Silicon 社区预览为主。公开 DMG 来自 SophoNote GitHub Release；正式签名、公证和干净机器门禁完成前，我们不会把它描述为 RC。</p>
+            <p>适用于 Apple Silicon（M 系列芯片）的 Mac。下载社区预览版，使用你自己的模型服务开始工作。</p>
             <div class="download-actions">
               <a
                 class="button button-gold button-large"
                 href="https://github.com/MarkingYang/sophonote/releases"
                 data-release-link
-              >查看 GitHub Releases</a>
+              >下载 Apple Silicon DMG</a>
               <a class="arrow-link" href="https://github.com/MarkingYang/sophonote#quick-start">从源码运行 <span aria-hidden="true">↗</span></a>
             </div>
-            <p class="release-card" data-release-status aria-live="polite">正在读取 GitHub Release 状态…</p>
+            <p class="release-card" data-release-status aria-live="polite">从 GitHub Releases 获取最新版本。</p>
+            <div class="install-details"><p><b>安装</b>打开 DMG，将 SophoNote 拖入“应用程序”。</p><p><b>预览说明</b>当前尚未通过 Apple 公证，macOS 可能提示无法验证开发者。查看 Release 说明后决定是否安装。</p><p><b>首次使用</b>配置模型供应商；Claude Code 需另装官方 CLI，云端记忆按需启用。</p></div>
           </div>
         </div>
       </section>
@@ -336,27 +347,27 @@
           <div class="faq-list reveal">
             <details open>
               <summary>我的数据真的都在本地吗？</summary>
-              <p>笔记正文、索引、会话映射和应用状态保存在你的 Mac。调用外部模型、抓取来源或你授权的 MCP 时，完成任务所需的最小上下文会发送给对应第三方；SophoNote 自身不提供云端账号或正文遥测。详见<a href="privacy.html">隐私说明</a>。</p>
+              <p>笔记正文、索引、会话映射和应用状态保存在你的 Mac。启用 OpenViking 云端记忆、调用外部模型、抓取来源或你授权的 MCP 时，完成任务所需的最小上下文会发送给对应第三方；SophoNote 自身不提供云端账号或正文遥测。详见<a href="privacy.html">隐私说明</a>。</p>
             </details>
             <details>
-              <summary>如何切换 Hermes、Pi 和 Claude Code？</summary>
-              <p>在会话输入框下方选择引擎。新会话首次发送后固定引擎；已有会话选择另一引擎时，会新建会话并保留未发送文字与附件，原会话历史仍可回看。历史不会跨引擎迁移。Hermes 与 Pi 随应用提供，Claude Code 需在本机安装官方 CLI。</p>
+              <summary>如何切换 Hermes、Pi、Claude Code 和 OpenCode？</summary>
+              <p>在会话输入框下方选择引擎。新会话首次发送后固定引擎；已有会话选择另一引擎时，会新建会话并保留未发送文字与附件，原会话历史仍可回看。历史不会跨引擎迁移。Hermes、Pi 与 OpenCode 随应用提供，Claude Code 需在本机安装官方 CLI。</p>
             </details>
             <details>
-              <summary>三种引擎的能力完全相同吗？</summary>
-              <p>三者共用模型配置、回复界面、文件审批与笔记修改审阅。Hermes 另外提供浏览器、电脑控制、计划任务及 Skill/MCP 管理；Pi 与 Claude Code 当前聚焦对话、文件与代码任务。可用工具会随所选引擎变化。</p>
+              <summary>四种引擎的能力完全相同吗？</summary>
+              <p>四者共用模型配置、回复界面、文件审批与笔记修改审阅。Hermes 另外提供浏览器、电脑控制、计划任务及 Skill/MCP 管理；Pi、Claude Code 与 OpenCode 当前聚焦对话、文件与代码任务。四引擎可在确认后接入同一个 OpenViking 云端记忆库；能力配置支持按引擎筛选，可用工具会随所选引擎变化。计划任务目前由 Hermes 执行。</p>
             </details>
             <details>
               <summary>需要自己配置模型吗？</summary>
-              <p>需要，在 AI 模型设置中配置一次即可。三种引擎共用供应商、密钥与模型选择，各自使用兼容的协议：Pi 支持 OpenAI 兼容和 Anthropic 配置；Claude Code 支持 Anthropic 协议及官方 DeepSeek 配置。已配置的 DeepSeek 无需另填密钥。本地或私有化 OpenAI 兼容端点可用于支持该协议的引擎；第三方模型费用由供应商收取。</p>
+              <p>需要，在 AI 模型设置中配置一次即可。四种引擎共用供应商、密钥与模型选择，各自使用兼容的协议：Pi 支持 OpenAI 兼容和 Anthropic 配置；Claude Code 支持 Anthropic 协议及官方 DeepSeek 配置。已配置的 DeepSeek 无需另填密钥。本地或私有化 OpenAI 兼容端点可用于支持该协议的引擎；第三方模型费用由供应商收取。</p>
             </details>
             <details>
               <summary>在哪里更新 Agent 引擎？</summary>
-              <p>进入「设置 → Agent 配置更新」，可统一查看三种引擎的版本与更新状态。Hermes 更新后重启应用生效；Pi 更新后供后续运行使用；Claude Code 按本机安装方式调用官方更新器，不支持自动更新的安装会显示手动指引。更新保留模型配置和会话历史。</p>
+              <p>进入「设置 → Agent 配置更新」，可统一查看四种引擎的版本与更新方式。OpenCode 随 SophoNote 版本更新。Hermes 更新后重启应用生效；Pi 更新后供后续运行使用；Claude Code 按本机安装方式调用官方更新器，不支持自动更新的安装会显示手动指引。更新保留模型配置和会话历史。</p>
             </details>
             <details>
               <summary>AI 会直接改掉我的笔记吗？</summary>
-              <p>不会。AI 只能提出绑定版本、选区和文本锚点的修改提案；你接受后才由 DocumentService 落盘。版本或锚点冲突时系统停止，不做就近猜测替换。</p>
+              <p>不会。AI 只能提出绑定版本、选区和文本锚点的修改提案；你接受后才写入笔记。版本或锚点冲突时系统停止，不做就近猜测替换。</p>
             </details>
             <details>
               <summary>现在支持哪些平台？</summary>
@@ -364,7 +375,7 @@
             </details>
             <details>
               <summary>SophoNote 与 Hermes Desktop 有什么关系？</summary>
-              <p>SophoNote 是独立的知识工作台，可选择 Hermes、Pi 或本机 Claude Code 作为执行引擎，笔记、项目、审批和文档审阅由 SophoNote 管理。Hermes 与 Pi 为开源引擎；Claude Code 是可选的本机 CLI，不随应用分发。SophoNote 不是 Hermes Desktop 的分叉。</p>
+              <p>SophoNote 是独立的知识工作台，可选择 Hermes、Pi 或本机 Claude Code 作为执行引擎，笔记、项目、审批和文档审阅由 SophoNote 管理。Hermes、Pi 与 OpenCode 为开源引擎；Claude Code 是可选的本机 CLI，不随应用分发。SophoNote 不是 Hermes Desktop 的分叉。</p>
             </details>
           </div>
         </div>

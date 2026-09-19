@@ -99,8 +99,8 @@ export async function authorizeWorkspace(root: string): Promise<WorkspaceBinding
 }
 
 export async function saveWorkspaceBinding(key: string, binding: WorkspaceBinding | null): Promise<void> {
-  bindingMemo.set(key, binding);
   await updateSetting(key, binding ? JSON.stringify(binding) : '');
+  bindingMemo.set(key, binding);
 }
 
 export function withWorkspacePermission(

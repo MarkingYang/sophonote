@@ -22,10 +22,9 @@ Data directories, secrets, and sidecar boundaries are in the root README and [SE
 | Doc | Role |
 |---|---|
 | [Contributing](../CONTRIBUTING.md) | Environment, PRs, Hermes sidecar, attach, packing, hygiene |
-| [License](../LICENSE) / [NOTICE](../NOTICE) | MIT; Hermes and CPython redistribution |
+| [License](../LICENSE) / [NOTICE](../NOTICE) | MIT; Hermes, Pi, and CPython redistribution |
 | [Security](../SECURITY.md) | Vulnerability reports; do not paste keys or notes in public issues |
-| [Hermes runtime diagram](./hermes-runtime-architecture.html) | DEC-011 interactive diagram (source: same-name `.archify.json`) |
-| [Current architecture diagram](./sophonote-current-architecture.html) | Product shell + Hermes execution plane |
+| [Current architecture diagram](./sophonote-current-architecture.html) | Shared product surface + Hermes / Pi / Claude Code; editable source: same-name `.archify.json` |
 
 ## Product and architecture sources of truth
 

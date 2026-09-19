@@ -1,6 +1,9 @@
+import { confirmDiscard } from '../../services/confirmDiscard';
+import OpenVikingSettingsPanel from './OpenVikingSettingsPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -50,7 +53,7 @@ import {
 import type { ProviderConfig } from '../../types';
 
 type TestStatus = { status: 'idle' | 'testing' | 'ok' | 'fail'; message?: string };
-type SettingsSection = 'models' | 'embedding';
+type SettingsSection = 'models' | 'embedding' | 'memory';
 
 function Toggle({
   checked,
@@ -837,7 +840,9 @@ function EmbeddingSettings() {
   );
 }
 
-export default function AIProviderSettingsPanel() {
+export default function AIProviderSettingsPanel({ onMemoryDirtyChange }: { onMemoryDirtyChange?: (dirty: boolean) => void }) {
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  useEffect(() => { onMemoryDirtyChange?.(memoryDirty); return () => onMemoryDirtyChange?.(false); }, [memoryDirty, onMemoryDirtyChange]);
   const { settings, updateSettings, apiKeys, ensureApiKeyLoaded } = useAppStore();
   const [section, setSection] = useState<SettingsSection>('models');
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -986,13 +991,14 @@ export default function AIProviderSettingsPanel() {
         {([
           { id: 'models' as const, label: '对话模型', icon: Sparkles },
           { id: 'embedding' as const, label: '向量嵌入', icon: Layers3 },
+          { id: 'memory' as const, label: '记忆', icon: Brain },
         ]).map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => setSection(item.id)}
+              onClick={async () => { if (section === item.id || !memoryDirty || await confirmDiscard('记忆有未保存修改，放弃修改并切换？')) setSection(item.id); }}
               className={`relative inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium transition-colors ${
                 section === item.id ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
               }`}
@@ -1122,9 +1128,9 @@ export default function AIProviderSettingsPanel() {
           </section>
 
         </div>
-      ) : (
+      ) : section === 'embedding' ? (
         <EmbeddingSettings />
-      )}
+      ) : <OpenVikingSettingsPanel onDirtyChange={setMemoryDirty} />}
 
       <ProviderCatalogDialog
         open={catalogOpen}

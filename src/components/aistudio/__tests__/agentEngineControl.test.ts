@@ -29,14 +29,20 @@ describe('引擎切换入口', () => {
     expect(select).toHaveBeenCalledWith('pi');
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
   });
-  it('菜单仅显示三个引擎名称，并标记当前选项', async () => {
+  it('菜单仅显示四个引擎名称，并标记当前选项', async () => {
     await render();
     expect(choice().textContent).toBe('Pi');
     const menu = container.querySelector('[aria-label="选择智能体引擎"]')!;
-    expect(menu.textContent).toBe('HermesPiClaude Code');
+    expect(menu.textContent).toBe('HermesPiClaude CodeOpenCode');
     expect(menu.querySelector('[aria-pressed="true"]')?.textContent).toBe('Hermes');
     await act(async () => choice().click());
     expect(select).toHaveBeenCalledOnce();
+  });
+  it('选择 OpenCode 后传递独立引擎标识', async () => {
+    await render();
+    const option = [...container.querySelectorAll('button')].find((button) => button.textContent === 'OpenCode')!;
+    await act(async () => option.click());
+    expect(select).toHaveBeenCalledWith('opencode');
   });
   it('创建失败保留当前引擎和菜单，允许重试', async () => {
     select.mockResolvedValue(false);

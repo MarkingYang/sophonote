@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::{
-    SophoNoteTool, ProvenanceRef, ToolDescriptor, ToolError, ToolOutput, ToolRegistry, UiArtifact,
+    ProvenanceRef, SophoNoteTool, ToolDescriptor, ToolError, ToolOutput, ToolRegistry, UiArtifact,
 };
 
 /// 假工具一：查天气（固定返回，验「模型调用 → 结构化结果回填」链路）

@@ -20,7 +20,7 @@ interface ProjectState {
   load: () => Promise<void>;
   select: (id: string | null) => void;
   selectDocument: (id: string | null) => void;
-  createProject: (name: string) => Promise<Project | null>;
+  createProject: (name: string, workspaceRoot?: string) => Promise<Project | null>;
   renameProject: (id: string, name: string) => Promise<void>;
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   /** AG-03：设置项目描述/目标（AI 归属整理与未来项目 Chat 的上下文；空串清除） */
@@ -73,7 +73,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   selectDocument: (id) => set({ selectedDocumentId: id }),
 
-  createProject: async (name) => {
+  createProject: async (name, workspaceRoot) => {
     const draft: Project = {
       id: crypto.randomUUID(),
       name: name.trim(),
@@ -91,7 +91,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       selectedDocumentId: null,
     }));
     try {
-      const created = await tauri.projectCreate(draft);
+      const created = await tauri.projectCreate(draft, workspaceRoot);
       set((s) => ({
         projects: s.projects.map((project) => project.id === draft.id ? created : project),
       }));

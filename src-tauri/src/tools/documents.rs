@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use super::{SophoNoteTool, ProvenanceRef, ToolDescriptor, ToolError, ToolOutput, UiArtifact};
+use super::{ProvenanceRef, SophoNoteTool, ToolDescriptor, ToolError, ToolOutput, UiArtifact};
 use crate::documents::service::{self, PatchPreview};
 
 fn service_err(e: service::ServiceError) -> ToolError {

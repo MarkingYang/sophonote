@@ -1,10 +1,9 @@
 import {
   Compass,
-  Sparkles,
   Wrench,
   Settings,
   NotebookPen,
-  MessageSquareText,
+  FolderKanban,
   Search,
   PanelLeftClose,
   CalendarClock,
@@ -17,8 +16,7 @@ import { safeUnlisten } from '../../services/browserErrors';
 
 export const navItems = [
   { id: 'discover', label: '发现', icon: Compass },
-  { id: 'conversation', label: '会话', icon: MessageSquareText },
-  { id: 'ai-studio', label: '工作室', icon: Sparkles },
+  { id: 'conversation', label: '项目', icon: FolderKanban },
   { id: 'notes', label: '笔记本', icon: NotebookPen },
   { id: 'scheduled-tasks', label: '计划任务', icon: CalendarClock },
   { id: 'tasks', label: '工具', icon: Wrench },
@@ -125,7 +123,10 @@ export default function Sidebar({ onToggleCollapse, width = 224 }: SidebarProps)
             return (
               <button
                 key={item.id}
-                onClick={() => setActivePage(item.id)}
+                onClick={() => {
+                  if (item.id === 'conversation') window.dispatchEvent(new Event('sophonote:projects-home'));
+                  setActivePage(item.id);
+                }}
                 onPointerEnter={() => void preloadPage(item.id)?.catch(() => {})}
                 onFocus={() => void preloadPage(item.id)?.catch(() => {})}
                 className={`relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors text-left ${

@@ -2,7 +2,7 @@
 
 > 文档状态：当前唯一技术架构真相源
 >
-> 基线日期：2026-08-19
+> 基线日期：2026-09-15
 >
 > 适用项目：本仓库根目录
 >
@@ -10,30 +10,70 @@
 
 ## 1. 背景、目标与设计范围
 
-SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI 工作环境。系统从资讯聚合器演进为包含发现、会话、项目工作室、Markdown 笔记、隐藏知识层、Agent 记忆、工具、Browser、代码工作区、Agent Runtime、Skill 和 MCP 的单体桌面应用；**Hermes 是统一 Agent 执行内核，SophoNote 保持产品控制面、数据真相源、权限与审批所有权**。当前架构既要完成现有性能/发布收口，也要支撑新版“会话一级入口 + 场景化 Agent 入口 + 会话后归属项目”的产品结构。核心挑战是：
+SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI 工作环境。系统从资讯聚合器演进为包含发现、项目任务、Markdown 笔记、隐藏知识层、Agent 记忆、工具、Browser、代码工作区、Agent Runtime、Skill 和 MCP 的单体桌面应用；**Hermes、Pi、Claude Code 是按会话选择的执行引擎，SophoNote 保持产品控制面、数据真相源、权限与审批所有权**。当前架构既要完成现有性能/发布收口，也要支撑新版“项目一级入口 + 任务执行 + 本地目录上下文与交付”的产品结构。核心挑战是：
 
 1. 在不牺牲本地数据可靠性的前提下，让输入、预览、文档和页签切换达到写作工具应有的响应速度。
-2. 让 Inline Completion 与完整 Agent Run 复用模型出口，但保持不同的延迟、状态和生命周期。
+2. 让 Inline Completion 与完整 Agent Run 复用模型配置、各自使用合适的执行协议，但保持不同的延迟、状态和生命周期。
 3. 让 Agent、Skill 和 MCP 可以读取项目材料、提出修改，但永远不能绕过用户审批和 DocumentService 直接覆盖 Markdown。
 4. 在 `.md` 文件、SQLite、前端编辑器状态和异步运行事件之间建立清晰的真相源与恢复边界。
 5. 收敛此前分散在多份设计、状态和审计文档中的架构口径。
-6. 让一级会话页、工作室/笔记本嵌入面板和工作室项目会话共享同一 Thread/Run/Hermes Session，并让发现/收件箱/工具通过受控 ContextHandoff 交接上下文，同时保持页面、项目与资料作用域透明且隔离。
+6. 让一级会话页、工作室/笔记本嵌入面板和工作室项目会话共享同一 Thread/Run/所选引擎 Session，并让发现/收件箱/工具通过受控 ContextHandoff 交接上下文，同时保持页面、项目与资料作用域透明且隔离。
 7. 允许会话先以无项目的快捷工作开始、后续归属项目，但不复制历史、不静默扩大长期记忆或工具权限。
 8. 在不引入第二文档真相源或第二长期记忆库的前提下，为笔记、项目、Claim、Decision 和 Artifact 建立可定位到 Git Commit/Blob/语义锚点的版本证据，并在证据变化时触发增量索引和受控复核。
 9. 把 Hermes 已有 Browser 管理能力提升为会话、工作室、笔记本共用的可见 Browser，同时处理用户接管、页面状态、登录/下载/表单等副作用和审计。
 10. 让会话临时绑定目录、工作室持久绑定仓库，并提供代码编辑、Git Diff、Terminal 与 Preview；外部工作树不得与受控 Markdown 的 DocumentService 写入语义混用。
 
-设计范围覆盖当前仓库的 React 前端、Tauri IPC、Rust 后端、SQLite/sqlite-vec、Markdown 文件与资产、模型调用、Agent/Skill/MCP、调度抓取、测试和发布流程。云端服务、多端同步和多人协同不在当前架构范围。
+设计范围覆盖当前仓库的 React 前端、Tauri IPC、Rust 后端、SQLite/sqlite-vec、Markdown 文件与资产、模型调用、Agent/Skill/MCP、调度抓取、测试和发布流程。自建云端控制面、多端同步和多人协同不在当前架构范围；外部模型服务与可选火山托管 OpenViking 的接入边界属于本架构。
+
+### 1.1 Rust 宿主与客户端分工（当前代码）
+
+| 层 | 当前职责 | 代码入口 |
+|---|---|---|
+| 系统 WebView + React | 中文界面、编辑器、模型/引擎选择、统一消息/审批/错误渲染；不直接管理本地文件或模型密钥 | `src/App.tsx`、`ProjectChatPanel.tsx` |
+| Rust 产品服务 | SQLite、Markdown、Keychain、抓取/embedding、文档 CAS/版本锚点/原子写与审计 | `commands.rs`、`documents/service.rs`、`model/*` |
+| Rust Agent Host | 解析固定引擎、校验模型/目录/附件、Run claim、进程/取消、适配事件、持久化再推 UI | `agent/commands.rs`、`agent/pi/mod.rs`、`agent/store.rs` |
+| 原生引擎 | Hermes/Pi/Claude Code 各自维护模型回合、工具调度和原生历史；模型 HTTP 由对应进程执行 | `agent/hermes/*`、`agent/pi/transport.rs`、`agent/claude/transport.rs` |
+| 工具副作用 | Pi/Claude 回 Rust 审批/路径/沙箱后执行；Hermes 原生工具由受监督 Runtime 执行，产品文档最终由 Host 回收审阅 | `agent/pi/tools.rs`、Hermes Surface/工作副本适配 |
+
+Rust 是有业务职责的本机控制层，不只是转发器；也没有另造一套模型推理/Agent 规划循环。统一业务 DTO/事件不要求三个运行时实现相同协议或同一 Rust trait。
+
+### 1.2 轻量客户端：已实现措施与待测预算
+
+Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/TypeScript 资源；应用界面不捆绑 Chromium，也不常驻一个 Node Web 服务。随包 Hermes/CPython 与 Pi 独立运行时、外部 Claude CLI 属于额外执行成本，不能计成“零成本 sidecar”。
+
+- `App.tsx` 使用 `lazy/Suspense`，`pagePreload.ts` 按 hover/focus/空闲加载页面。
+- `pageKeepAlive.ts` 只保活 Notes/Studio，最多两个；轻量页卸载，隐藏页停昂贵订阅/快捷键，原生子 WebView 停泊。
+- `ProjectChatPanel` 历史窗口化，流式稳定块与活跃尾部分开；编辑器按变更驱动保存，不空闲序列化。
+- Pi/Claude 每轮启动进程，终态/取消回收；Hermes 由启动与健康监督链管理。应用还有发现状态 15 秒轮询和后台任务，不能称全部按需或全局零轮询。
+- `.md`/SQLite 磁盘优先已成立；Hot/Warm/Cold、跨进程 ResourceBudgetManager/lease/FTS-only 压力治理仍是 NEXT-055 方案，未编码为完整预算执行器。
+
+整 App 性能口径要统计 Rust、WebView、全部活跃引擎、Browser/电脑驱动、子工具与可选本地模型的进程树峰值、空闲 CPU 与启动时延。知识/记忆 `<1 GiB` 是独立增量预算目标，不含基础引擎，不代表整 App 内存上限；火山托管 OpenViking 的服务端 RSS 与本机分账。当前只有已登记的编辑/切换夹具结果，不能声称三引擎并发资源基线已通过。
+
+### 1.3 实现与目标的关键区别
+
+当前已有文档/选区、目录与权限的 Run 内校验；Pi/Claude 持有不可变 `tools::Scope`，前端有 `WorkspaceScopeSnapshot`。这不等于已实现跨域 `AgentScopeProvider`、`scope_type/scope_id` 或 `scope_snapshot_json` 持久化（NEXT-031/035）。笔记本已可交付工作副本 Diff，但独立 document Thread/Memory scope 仍未完成。
+
+当前 Pi/Claude 普通文件由 Rust `tools::execute` 在复核/批准后原子写入；`edit` 要求唯一 oldText，`write` 并不提供完整版本化 CAS。通用 CodeChangeSession/CodeChangeService、逐文件/逐 hunk 代码审查与 PreviewSupervisor 仍是后续方案。笔记 `notes/` 不使用这条直接文件路径，继续走 DocumentService。
+
+`agent_thread_create` 仍有 Hermes Gateway 环境检查，而 `agent_run_start` 已按 engine 分派；这是新建入口的遗留耦合，NEXT-075 继续跟进。本节只核查并记录，不把独立 Run 协议接入等同于彻底移除 Hermes 启动依赖。
+
+### 1.4 项目与任务入口（2026-09-18）
+
+产品导航使用“项目”，兼容内部 `conversation` 路由；`ai-studio` 旧入口重定向项目页，不再挂载隐藏工作室。界面任务沿用 Thread/Run/原生 Session，不新建第二套任务存储。项目首页展示卡片与创建入口；空列表不渲染引导卡，项目会话面可关闭空态展示但保留输入与加载/错误反馈。进入后显示按 `agent_threads.project_id` 隔离的会话目录；顶部项目名只读展示，回首页选择项目后切换 scope，保留本页各项目最近打开的任务。任务操作菜单仅保留置顶/取消置顶与归档；移除所属项目选择器及页面专用移动处理，保留 Host 关系移动契约，运行中禁用归档。返回首页卸载会话面板但不取消 Run。旧 collection 和归档元数据保留，移除未归属任务入口；项目页只加载并展示有效项目内任务。无项目或项目被删除时返回首页，不挂载可发送面板。创建弹窗分“新建文件夹/使用已有文件夹”；前者使用原生目录选择器的创建目录能力，Rust 只接收最终已存在的目录，继续同事务保存项目/绑定。
+
+`project_create` 接收可选 `workspaceRoot` 兼容参数：新项目界面强制选择目录，Rust canonicalize 后在同一 SQLite 事务中创建 projects 和 `ui:project-workspace:<id>` 绑定。旧入口兼容无目录项目，补选后才能得到文件范围。项目任务只使用项目绑定；底层可空 Thread 归属仅保留给历史数据和笔记内嵌会话兼容，不提供独立项目任务入口。目录加载期间停止挂载可发送面板，避免旧目录在切项目后短暂泄漏。
+
+项目文件浏览复用 Rust `local_workspace_scan/list_directory/read`，按用户展开目录和打开文件有界读取；加入任务只传显式文件附件，仍由 Host 校验。交付文件写入沿用各引擎已有 Workspace/审批工具，受管笔记仍唯一经 DocumentService。任务移动事务拒绝空目标并检查目标存在与无非终态 Run，保留旧 Run 的项目审计与原生 Session，清理旧任务目录绑定；不会自动沉淀 Memory。
 
 ## 2. 功能与非功能需求
 
 ### 2.1 功能需求摘要
 
-- 当前一级页面：Discover、Conversation、Studio、Notes、Scheduled Tasks、Tasks，Settings 为辅助入口；Inbox 保留为 Settings 子页面，旧 Library 页面停止挂载。收件箱接管旧 Library 的信息条目检索与索引能力，并作为首次拉取起严格保留 168 小时的短期池。知识层隐藏在项目/笔记/资料/会话之下提供检索、版本、证据和关系；Hermes Memory 独立保存 Agent 的目标、约束、偏好、决策和未完成状态；未来 Artifacts 只做来源对象投影。
+- 当前一级页面：Discover、项目（内部 Conversation）、Notes、Scheduled Tasks、Tasks，Studio 隐藏并重定向项目，Settings 为辅助入口；Inbox 保留为 Settings 子页面，旧 Library 页面停止挂载。收件箱接管旧 Library 的信息条目检索与索引能力，并作为首次拉取起严格保留 168 小时的短期池。知识层隐藏在项目/笔记/资料/会话之下提供检索、版本、证据和关系；Hermes Memory 独立保存 Agent 的目标、约束、偏好、决策和未完成状态；未来 Artifacts 只做来源对象投影。
 - 多源抓取、正文与证据获取、证据化 AI 解读、日报候选和语义搜索。
 - Markdown 文档创建/编辑/预览/分屏、双链、任务、模板、资源、导出。
 - 独立 Inline Completion，支持取消、缓存、过滤和聚合指标。
-- 项目文档树、多轮 Agent Chat、事件恢复、工具卡、Skill、stdio MCP。
+- 本地文件工作室、多轮三引擎 Chat、事件恢复与审批；Hermes 原生 Skill/MCP。旧项目 Article 树仅兼容，不是当前主界面。
 - 新版目标：一级会话中心、工作室/笔记本嵌入 Agent、发现/收件箱/工具 ContextHandoff、会话内运行状态、显式 ScopeSnapshot、会话后归属项目和跨产品域的受控工具调用。
 - 会话、工作室、笔记本共用可见 Browser；会话和工作室支持 WorkspaceBinding、代码文件树/编辑、Git Diff、Terminal、应用 Preview 和 Agent 验证。
 - 选区快照、TextAnchor、Range Patch、逐 hunk 审阅、冲突保护、操作审计和撤销。
@@ -52,117 +92,47 @@ SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI �
 
 ## 3. 设计原则与技术约束
 
-1. **单仓单体、模块化边界**：不拆微服务。允许**唯一一类**本地进程：受控、随应用签名分发、仅监听 `127.0.0.1`、随机端口 + Session Token 的 **Agent 执行 sidecar**（目标：Hermes Gateway）。禁止把产品控制面或 Markdown 真相源下沉到 sidecar；开发期可附着本机 Runtime，发布期不依赖用户全局安装。
-2. **副作用后置于 Rust**：前端不得直连第三方 HTTP、模型或 Hermes；WKWebView 只 invoke SophoNote。避免 CORS、密钥泄露和多套网络策略。
-3. **真相源唯一、职责分离**：文档当前正文以 `notes/<articleId>.md` 为准；目标 Git 对象是语义版本事实，SQLite 保存可重建版本投影。SQLite 同时是产品元数据、索引、任务、Run 事件和审计存储。Hermes Session DB 是 Chat 会话状态与长期记忆真相源；RunStore 是 SophoNote UI/重放/故障恢复真相源。SophoNote 只保存 `external_session_id` 映射和展示副本，不另建长期记忆库，也不依赖 Hermes Session DB 恢复 UI。
-4. **框架类型不外泄**：Rig、Hermes HTTP/SSE/JSON-RPC、rmcp、Milkdown 内部类型只出现在 Adapter/Transport/ToolGateway/编辑器封装处；业务 DTO、SQLite 和前端 store 不绑定框架。
-5. **按真相源设置唯一安全写入口**：对 SophoNote 文档，模型只能调用 `propose_document_patch` 与 `rename_article`，两者恒 dry-run，批准后的正文/标题唯一经 DocumentService 完整链路落盘。对显式 WorkspaceBinding 内的代码文件，模型只能形成 CodeChangeSession，批准或窄范围 `Accept edits` 后唯一经 CodeChangeService 落盘。两类入口都由 Rust 复核，不能互相代替或旁路。
+1. **单仓单体、受控执行进程**：Hermes Gateway 使用 loopback WebSocket + 随机端口/Token；Pi 使用 stdin/stdout JSONL RPC；Claude Code 使用 stream-json，并通过逐 Run 鉴权的 loopback MCP 调用 Rust 工具。Hermes/Pi 随包或使用已验证私有槽，Claude Code 明确依赖本机官方 CLI。Rust 监督生命周期，产品控制面与 Markdown 真相源不下沉到引擎。
+
+2. **副作用后置于 Rust**：前端不得直连第三方 HTTP、模型或任何 Agent 引擎；WKWebView 只 invoke SophoNote。避免 CORS、密钥泄露和多套网络策略。
+3. **真相源唯一、职责分离**：`notes/<articleId>.md` 是当前正文；SQLite 保存元数据、索引、任务、Run 和审计。每个引擎在私有目录维护原生会话，Thread 保存引擎与外部会话映射；RunStore 是统一 UI/重放/恢复真相源。Hermes Memory 属于 Hermes，不把 Pi/Claude 历史冒充共享长期记忆。目标 Git 语义版本与 SQLite 投影仍与当前正文分层。
+
+4. **框架类型不外泄**：Rig、Hermes JSON-RPC/WS、Pi JSONL RPC、Claude stream-json、rmcp、Milkdown 内部类型只出现在 Adapter/Transport/ToolGateway/编辑器封装处；业务 DTO、SQLite 和前端 store 不绑定框架。
+5. **按真相源设置安全写入口**：笔记工作副本只产生 DocumentService dry-run 提案，接受后 CAS/锚点复核落盘。Pi/Claude 当前普通文件通过 Rust 工具的路径/权限/批准与原子写入；CodeChangeService/逐 hunk 代码审查为后续目标。Hermes 原生工具仍受 Host 显式范围约束。两种正文域不得旁路混写。
 6. **交互优先调度**：输入/点击为高优先级，序列化、预览、关系分析、embedding 和抓取为低优先级异步工作。
 7. **恢复机制与知识版本分层**：内部 version、operation 和短期 checkpoint 只用于并发安全/事故恢复；Git 语义版本只在有知识意义的 checkpoint 形成，用于长期溯源、比较和受控恢复。两者不互相替代，普通自动保存不产生 Commit。
-8. **渐进迁移**：SQLite 建表/补列、文件迁移和 operation 恢复必须幂等；升级失败不得破坏已有正文。Agent 执行平面迁移必须先 `AgentEngine` 抽象与双跑，再切默认、后删旧内核。
+8. **渐进迁移**：SQLite 建表/补列、文件迁移和 operation 恢复必须幂等；升级失败不得破坏已有正文。新增引擎必须先完成协议、权限与事件契约验证，再开放入口；现有 Thread 不换绑原生历史。历史 Rig 不注册产品路径。
 9. **会话视图单一内核**：完整会话页、工作室/笔记本嵌入面板与项目会话视图只共享/组合同一个无页面依赖的会话内核；发现/收件箱/工具只产生上下文交接，不渲染第二套 Chat。任何视图不得自行维护第二份 selectedThread、恢复轮询或 Channel 订阅。
-10. **作用域在发送时冻结**：页面只提供 `AgentScopeDescriptor`；Rust 在 `agent_run_start` 重新校验并固化 `ScopeSnapshot`。导航状态不是授权，模型不能因用户切页自动获得新资料或工具。
-11. **归属不等于复制或记忆授权**：会话归属项目只更新关系和后续默认作用域；Hermes Session ID 不变，历史摘要/成果/外部资料是否进入项目长期记忆分别由用户决定。
+10. **作用域在发送时固定**：Rust 对当前文档/选区、目录、附件和权限重新校验，Pi/Claude Scope 随 Run 保持不变；通用 AgentScopeDescriptor/持久 ScopeSnapshot 是目标契约，尚未完整落地。导航不是授权，切页不能扩大旧 Run 的资料范围。
+11. **归属不等于复制或记忆授权**：会话归属项目只更新关系和后续默认作用域；所选引擎原生 Session ID 不变，历史摘要/成果/外部资料是否进入项目长期记忆分别由用户决定。
 12. **知识、记忆、Artifacts 分离**：隐藏知识层只提供检索/版本/证据/关系；Hermes 是记忆正文真相源；Artifacts 只保存来源引用与展示投影，不复制正文或创建第三套知识对象。
-13. **代码与笔记双写路径分离**：`notes/` 仍唯一经 DocumentService；用户授权代码目录经 WorkspaceService/CodeChangeService。Diff 审查组件可以共用，base、冲突、回滚和版本真相源不能共用。
+13. **代码与笔记双写路径分离**：notes 唯一经 DocumentService；当前授权代码文件由 Rust 文件工具处理。后续 CodeChangeService 可以复用 Diff 视图，不能混用文章版本/锚点和工作树 hash。
 14. **Browser 与 Preview 分离**：Browser 是通用网页协作、页面控制权归 Browser Runtime；Preview 是当前工作产物及本地服务验证、进程控制权归 Host。二者可共享渲染容器和 Agent 检查能力，但 Session、权限、生命周期和审计各自独立。
 
-技术约束：桌面宿主为 Tauri v2（macOS 完整体验 + Windows 安装包），React 19、TypeScript、Tailwind 4、Zustand、Milkdown/Crepe、SQLite/sqlite-vec。迁移期仍锁 `rig-core`/`rig-agent = 0.41.0`、`rmcp = 3.1.2`；Hermes Gateway 是唯一产品 Agent 引擎。Release 已随应用分发 Hermes 0.20.0、钉扎源码/`uv.lock` 和自包含 CPython，启动前校验逐文件 SHA-256，不依赖用户全局安装或仓库环境变量。代码/本机隔离验证已完成；Developer ID 公证、Windows Authenticode 与独立干净机证据仍只能在具备对应凭据的发布环境完成。
+技术约束：桌面宿主为 Tauri v2（macOS 完整体验；Windows 构建/验收单独记录），React 19、TypeScript、Tailwind 4、Zustand、Milkdown/Crepe、SQLite/sqlite-vec。Hermes 0.20.0 + CPython 3.11、Pi 0.85.1 官方独立程序已钉扎随包；Claude Code 使用本机官方 CLI（最低 2.1.233）。已验证私有更新槽可替代随包 Hermes/Pi；启动校验、签名、公证和干净机门禁见 §17。`rig-core`/`rig-agent = 0.41.0` 及旧循环仅保留为工程测试/清债资产，不提供产品回退。
 
 ## 4. 总体架构图
 
+当前交互图：[三引擎架构 HTML](./sophonote-current-architecture.html) · [Archify 源](./sophonote-current-architecture.archify.json)。它替换旧 Hermes 目标图，依据仓库已实现的入口、Transport、模型快照、RunStore 与工具边界绘制；图中来源可定位代码。以下 Mermaid 提供同一结构的文档内概览，不表示所有引擎采用同一个原生协议或 Rust trait。
+
 ```mermaid
-flowchart TB
-  subgraph FE["React / WKWebView"]
-    UI["六个一级产品域 + 设置"]
-    SHELL["AppShell / EmbeddedAgentPanel / RunIndicator"]
-    CHAT["ConversationCore / FullView / CompactView"]
-    BUI["BrowserSurface / Control Handoff"]
-    CUI["CodeWorkspace / Files / Editor / Diff / Terminal / Preview"]
-    SCOPE["AgentScopeProvider"]
-    ED["Milkdown / ProseMirror 编辑器"]
-    ST["appStore · projectStore · agentStore · changeSessionStore"]
-    FS["tauri.ts / AI 与编辑服务"]
-    UI --> SCOPE --> SHELL
-    SHELL --> CHAT
-    CHAT --> BUI
-    CHAT --> CUI
-    UI --> ST
-    CHAT --> ST
-    ED --> ST
-    ST --> FS
-  end
-
-  subgraph IPC["Tauri IPC"]
-    INV["invoke · ApiResponse"]
-    EVT["Channel / Event · schemaVersion + seq"]
-  end
-
-  subgraph RS["Rust 单体后端"]
-    CMD["Command 层"]
-    DOC["DocumentRepository / DocumentService"]
-    AG["Agent Host / RunStore / AgentEngine"]
-    GW["ModelGateway / ToolGateway / Policy"]
-    EXT["历史 Skill / MCP 测试资产（产品未注册）"]
-    CT["内容抓取 / Scheduler / Export / Search"]
-    KV["目标 Knowledge / Version / Provenance"]
-    BS["BrowserSessionAdapter / Audit"]
-    WS["WorkspaceService / CodeChangeService"]
-    PS["PreviewSupervisor / Process Owner"]
-    CMD --> DOC
-    CMD --> AG
-    AG --> GW
-    GW --> EXT
-    CMD --> CT
-    CMD --> KV
-    CMD --> BS
-    CMD --> WS
-    CMD --> PS
-  end
-
-  subgraph LOCAL["本地数据"]
-    MD["notes/*.md + assets/"]
-    DB["sophonote.db"]
-    VEC["sqlite-vec"]
-    GIT["目标 Managed Git / Linked Repositories"]
-    WDIR["用户授权 Workspace / Git Working Tree"]
-    ART["Artifacts Projection（目标）"]
-    LOG["logs/dev.log"]
-  end
-
-  subgraph OUT["外部依赖"]
-    H["Hermes Agent Runtime sidecar"]
-    LLM["OpenAI-compatible Provider / Embedding"]
-    SRC["GitHub · arXiv · HN · HuggingFace · ProductHunt"]
-    MCP["Hermes 管理的 MCP Servers"]
-    BR["Hermes Browser Runtime"]
-    TERM["Hermes Terminal Backends"]
-  end
-
-  FS --> INV --> CMD
-  AG --> EVT --> ST
-  DOC --> MD
-  DOC --> DB
-  CT --> DB
-  CT --> VEC
-  KV --> DB
-  KV --> VEC
-  KV --> GIT
-  KV --> ART
-  WS --> WDIR
-  AG --> DB
-  AG --> H
-  H --> GW
-  GW --> LLM
-  CT --> SRC
-  H --> MCP
-  H --> BR
-  H --> TERM
-  BS --> H
-  WS --> H
-  PS --> WDIR
-  RS --> LOG
+flowchart LR
+  UI["统一会话 UI / agentStore"] -->|Tauri invoke| HOST["Rust Agent Host"]
+  CFG["ai_config / Keychain"] -->|所选模型快照| HOST
+  HOST -->|JSON-RPC / WS| H["Hermes Gateway"]
+  HOST -->|JSONL RPC| P["Pi 独立程序"]
+  HOST -->|stream-json| C["Claude Code CLI"]
+  H --> LLM["用户配置的模型服务"]
+  P --> LLM
+  C --> LLM
+  HOST -->|统一 AgentEvent v4| STORE["SQLite / RunStore"]
+  STORE -->|Channel / replay / snapshot| UI
+  HOST --> POLICY["Rust 工具与审批"]
+  POLICY -->|Diff / CAS| DOC["DocumentService / notes/*.md"]
+  POLICY -->|授权路径与沙箱| WS["用户工作区"]
 ```
+
+Completion、embedding 等非 Agent 请求由 Rust ModelGateway/模型服务处理，继续复用配置，不经过 Agent Run；当前发现 AI 解读由 Hermes Skill/Cron 执行。Hermes 原生 Skill/MCP、Browser、电脑控制、Cron 与 Memory 属于其专属能力；Pi/Claude 的 Rust 工具不等于接入这些管理面。
 
 ## 5. 核心组件与职责边界
 
@@ -191,7 +161,7 @@ flowchart TB
 | Store | 所有权 | 生命周期 |
 |---|---|---|
 | `appStore` | 来源、items、articles、tasks、settings、全局 UI、语义索引 | 应用级；当前体量大，组件必须 selector 订阅 |
-| `projectStore` | 项目、成员关系、项目文档树 | 项目域；不得合入 appStore |
+| `projectStore` | 项目、历史成员关系兼容与项目 UI 状态 | 项目域；不得合入 appStore |
 | `agentStore` | Thread/Run/Event/Message/ToolCard、恢复与降级 | 运行域；不得接收 completion 或编辑 dirty 状态 |
 | 目标 `agentUiStore`（可独立小切片） | 工作室/笔记本面板展开与宽度、各作用域最近 Thread、完整视图定位、待消费 ContextHandoff | 只保存 UI 引用；不得复制消息、事件或权限；是否新增须以现有 store 边界评审为准 |
 | 目标 `browserUiStore` | 当前 BrowserSurface、页面展示快照、控制权和面板状态 | 只保存 UI 投影；真实页面/导航/DOM/控制状态归 Hermes；Cookie/Profile 不进 Zustand/localStorage |
@@ -208,7 +178,12 @@ flowchart TB
 | `notes.rs` | Markdown/frontmatter/资产文件 I/O 与历史数据迁移 |
 | `documents/repository.rs` | 文档读取、CAS version、原子写入、单文档锁的底层仓储 |
 | `documents/service.rs` | Patch dry-run/apply/reject/undo、operation 状态机、revision checkpoint、启动恢复 |
-| `agent/*` | Hermes-only 产品运行路径 + 随包钉扎 Sidecar/开发附着 Adapter/Session/Gateway/Bridge；Release 只解析包内 Runtime 并校验清单与逐文件 SHA-256，历史 Rig 代码只供显式 feature 的 Spike/对照测试，不能成为产品回退；RunStore 始终是 UI/恢复规范真相源 |
+| `agent/*` | 三引擎调度、原生会话映射、事件适配、RunStore 与恢复；不可用时独立失败，无跨引擎/Rig 回退 |
+| `agent/hermes/*` | Gateway Client Surface、随包/私有更新槽、原生能力与工作副本适配 |
+| `agent/pi/*` | Pi RPC；也承载 Pi/Claude 共用的 Run 准备、配置快照、claim、审批与文件工具 |
+| `agent/claude/*` | 官方 CLI 检测、Anthropic/DeepSeek 快照适配、stream-json 与逐 Run loopback MCP |
+| `agent/runtime_updates.rs` | Pi 私有版本安装与 Claude 官方更新器策略；Hermes 更新仍由 Hermes 模块维护 |
+
 | `model/*` | Provider 配置、OpenAI-compatible 请求、ModelGateway、重试和 prompt 版本 |
 | `tools/*` | 内置项目/文档工具、ToolGateway、结构化 ToolOutput、MCP 封装 |
 | `skills/*` | bundled/user/workspace Skill 加载、校验、启用、预算与工具交集 |
@@ -251,7 +226,7 @@ sequenceDiagram
 - React 页面只通过 `src/services/tauri.ts` 包装调用命令，不在组件散落裸 `invoke`。
 - 通用 CRUD 命令可直接调用 repository；涉及 Patch、审批、恢复、幂等的写入必须经过 service。
 - Agent 工具只调用 ToolGateway 注册的能力；Document tool 内部仍走 DocumentService，不直接操作 notes/DB。
-- Completion 与 Agent 共享 ModelGateway，但 Completion 不进入 Thread/Run/Tool 循环。
+- Completion 与 Agent 共享 `ai_config`/Keychain，不共享执行循环：Completion 经 Rust ModelGateway 请求；Agent 由 Host 传入所选模型快照，再由对应引擎调用供应商。Completion 不创建 Thread/Run。
 
 ## 7. 核心数据流与控制流
 
@@ -308,35 +283,48 @@ Editor docChanged/光标稳定
 
 ### 7.4 Agent Run 与恢复
 
+执行进度的等待提示基于当前 Run 已接收事件的最后时间戳，前端计时器仅负责显示经过时间；没有新事件不等于引擎失败。工具计数使用真实调用数，归并行数只表示动作分类。此展示层不改写 Run 状态，不绕过既有 reconcile、审批或 DocumentService。
+
+`agent_run_start` 先解析 Thread 的 `engine`，默认 Hermes。首次 Run 固定引擎；Pi/Claude 共用 `agent/pi/mod.rs` 中的准备与 claim，随后分派各自 Transport。Hermes 使用既有 `AgentEngine`/Surface Adapter；当前不是三个引擎都实现该 trait。运行记录保留实际引擎与版本。
+
 ```mermaid
 sequenceDiagram
-  participant C as Chat
-  participant A as agent_run_start
-  participant R as RunController
-  participant G as Model/ToolGateway
-  participant S as RunStore
-
-  C->>A: Thread + Project + Selection + Skill
-  A->>S: 创建 Thread/Run/用户消息
-  A->>R: 启动可取消 Run
-  loop 模型/工具回合（受预算限制）
-    R->>G: ModelRequest / ToolCall
-    G-->>R: ModelTurn / ToolOutput
-    R->>S: 先持久化带 seq 的事件
-    S-->>C: 再广播 Channel 事件
+  participant UI as ProjectChatPanel
+  participant Host as Rust Agent Host
+  participant Engine as 所选原生引擎
+  participant Store as RunStore
+  participant Tools as Rust 工具与文档审批
+  UI->>Host: thread + engine + provider/model + scope + attachments
+  Host->>Host: 校验固定引擎、模型白名单、权限与 Run claim
+  Host->>Host: 校验并固定本轮文档/附件/目录与权限
+  Host->>Store: Run / 用户消息 / 引擎元数据
+  Host->>Engine: 模型快照 + 原生会话 + 用户输入
+  loop 真实流式与工具事件
+    Engine-->>Host: 引擎原生事件 / 工具请求
+    opt 受控工具或文档提案
+      Host->>Tools: 复核作用域、权限、审批
+      Tools-->>Host: 结果或待审阅 Diff
+      Host-->>Engine: 工具结果
+    end
+    Host->>Store: 映射 AgentEvent v4，先持久化
+    Store-->>UI: Channel / replay / snapshot
   end
-  R->>S: 写终态与 Assistant 消息
+  Host->>Store: 单一终态与最终消息
 ```
+
+三引擎共享正式事件契约和页面渲染，不共享原生 transcript。无原生思考或工具事件时，不生成虚构过程；阶段说明与最终答案分别落库，避免重复回复。文档工作副本的最终回收也进入同一 dry-run Diff 与 DocumentService 审阅流程。
 
 窗口重挂载或 seq 缺口：Thread history → replay(afterSeq) → Snapshot；仍缺失则记录 degraded。Thread history 从请求发起即进入恢复门禁；若历史中最后一个 Run 无终态，`agentStore` 恢复 `runningRunByThreadId`、标记 resuming，并按 750ms 从 RunStore 持续 replay/Snapshot。Composer 与 `startRun` 共用同一门禁，只有终态事件，或 `agent_runs` 权威 Snapshot 已是 completed/failed/cancelled/interrupted，才允许同一 Thread 开始下一轮；旧 Run 迟到终态不得清理新 Run 标记。
 
-宿主进程重启后 CancellationToken 不存在，只能证明 SophoNote 本地 observer 丢失，不能证明 Hermes 回合已结束。`agent_run_reconcile` 必须先对 Thread 绑定的 Hermes Session 调用 `session.resume`：若 `running/streaming/auto_continue` 为真，则保留该 WebSocket、从 RunStore `latest_seq + 1` 重新发射并消费到 `message.complete`；若 Hermes 已空闲但 transcript 在对应用户消息之后存在 assistant 回答，则补齐 `message_completed/run_completed`；仅当 Hermes 明确空闲且没有对应回答时写 `interrupted`。Hermes 暂不可达或恢复连接中断时不生成假终态，输入继续锁定，由下一轮恢复探针重试。任意 Run 终态都是过程轨的硬边界：即便断连窗口漏收 `tool.complete`，历史工具活动也必须停止转圈并以终态时间收口。
+**Hermes 恢复：** 宿主进程重启后 CancellationToken 不存在，只能证明 SophoNote 本地 observer 丢失，不能证明 Hermes 回合已结束。`agent_run_reconcile` 必须先对 Thread 绑定的 Hermes Session 调用 `session.resume`：若 `running/streaming/auto_continue` 为真，则保留该 WebSocket、从 RunStore `latest_seq + 1` 重新发射并消费到 `message.complete`；若 Hermes 已空闲但 transcript 在对应用户消息之后存在 assistant 回答，则补齐 `message_completed/run_completed`；仅当 Hermes 明确空闲且没有对应回答时写 `interrupted`。Hermes 暂不可达或恢复连接中断时不生成假终态，输入继续锁定，由下一轮恢复探针重试。任意 Run 终态都是过程轨的硬边界：即便断连窗口漏收 `tool.complete`，历史工具活动也必须停止转圈并以终态时间收口。
 
-**会话生命周期（AG-01）**：每项目可有多个活跃 Thread；顶栏 tab 切换。用户关闭（×）：**无任何用户对话则硬删，不进历史**；有对话则写入 `closed_at` 进入历史（须已有明确标题，可由首条 Query 与回复摘要生成；占位「新会话」等不得出现在历史）。历史中「归档」写入 `archived_at` 后对 UI 不可见。设置键 `agent.thread_history_ttl_days`（默认 **0=永久**）：仅当配置为正整数时，对**已归档**且超过该天数的 Thread 硬删除。列表按 `scope=active|history` 过滤。
+**Pi / Claude 恢复：** 宿主丢失的在途原生进程不宣称可续接同一活跃轮次；对账将孤儿 Run 标记为 `interrupted`。下一轮重新启动进程并打开稳定的私有原生历史。UI 重挂载仍复用上述 RunStore replay/snapshot，不读取原生文件拼装另一套页面历史。
 
-**新版目标会话生命周期（DEC-016/027）**：上述当前实现保留为迁移输入，不再限定“每项目”。Thread 可在 `project_id IS NULL` 时创建为快捷会话，并在后续归属一个项目；项目视图只是 `projectId` 过滤入口。完整会话页、工作室/笔记本嵌入面板与工作室共享同一生命周期控制器；发现/收件箱/工具的 ContextHandoff 只向该生命周期提交候选上下文。归属项目不创建新 Thread/Session；若当前 Thread 已有非终态 Run，必须等待终态后再改变归属，避免一个 Run 中途切换工具/记忆边界。
+**会话生命周期（AG-01）**：当前 Thread 可无项目或属于一个项目；一级会话从列表切换，工作室从项目会话列表打开。用户关闭（×）：**无任何用户对话则硬删，不进历史**；有对话则写入 `closed_at` 进入历史（须已有明确标题，可由首条 Query 与回复摘要生成；占位「新会话」等不得出现在历史）。历史中「归档」写入 `archived_at` 后对 UI 不可见。设置键 `agent.thread_history_ttl_days`（默认 **0=永久**）：仅当配置为正整数时，对**已归档**且超过该天数的 Thread 硬删除。列表按 `scope=active|history` 过滤。
 
-### 7.5 新版会话、作用域与项目归属
+**会话归属目标（DEC-016/027）**：Thread 已可在 `project_id IS NULL` 时创建为快捷会话；后续归属/移动项目仍待 NEXT-033，项目视图只是 `projectId` 过滤入口。完整会话页、工作室/笔记本嵌入面板与工作室共享同一生命周期控制器；发现/收件箱/工具的 ContextHandoff 只向该生命周期提交候选上下文。归属项目不创建新 Thread/Session；若当前 Thread 已有非终态 Run，必须等待终态后再改变归属，避免一个 Run 中途切换工具/记忆边界。
+
+### 7.5 通用作用域与项目归属目标（NEXT-031/033/035 未完成）
 
 ```mermaid
 sequenceDiagram
@@ -344,7 +332,7 @@ sequenceDiagram
   participant SP as AgentScopeProvider
   participant Host as Agent Host
   participant Store as RunStore
-  participant Hermes as Hermes Runtime
+  participant Engine as 所选原生引擎
   participant Policy as Tool Policy
 
   UI->>SP: 读取当前页面候选作用域
@@ -352,9 +340,9 @@ sequenceDiagram
   UI->>Host: agent_run_start(threadId, message, scopeDescriptor, attachments)
   Host->>Host: 校验 Thread 归属/实体/版本/用户授权
   Host->>Store: 固化 ScopeSnapshot + Run
-  Host->>Policy: 计算 allowedTools = scope ∩ skill ∩ auth ∩ policy
-  Host->>Hermes: sessionId + 用户原文 + 原生附件/Skill引用
-  Hermes-->>Host: Gateway reasoning/tool/interim/message events
+  Host->>Policy: 计算 allowedTools = scope ∩ 当前引擎能力 ∩ auth ∩ policy
+  Host->>Engine: 原生会话 + 用户输入 + 按引擎适配的附件
+  Engine-->>Host: 原生事件，由 Adapter 转为 AgentEvent
   Host->>Store: RunStore-first 持久化
   Store-->>UI: 同一事件供完整视图/嵌入面板/项目视图渲染
 ```
@@ -394,7 +382,7 @@ transaction:
   agent_threads.scope_type = 'project'
   agent_threads.scope_id = targetProjectId
 post-commit:
-  Hermes Session ID 不变
+  所选引擎原生 Session ID 不变
   依据用户选择创建 memory summary / document links / knowledge refs
   任一步失败不得复制或丢失 Thread 历史
 ```
@@ -437,8 +425,9 @@ sequenceDiagram
 - 当前 schema v4 payload 包含 `run_started`、`model_started`、`reasoning_delta`、`reasoning_completed`、`message_delta`、`message_interim`、`message_completed`、`tool_started`、`tool_completed`、审批/澄清、终态与 `engine_degraded`；旧事件通过 serde 默认和 mapper 兼容。`message_interim` 会把当前助手说明封存为独立消息，后续最终答案不能覆盖。
 - Snapshot 是独立查询/恢复路径，`interrupted` 是 Run 持久状态；二者不得伪装成已经落库的实时事件。附着 Hermes 已提供真实 reasoning/message delta；非 Agent 模型路径不保证同等级 token 流。
 - 工具完成结果分为 `model_text`、`structured`、`ui_artifact`、`provenance`、`truncated`；`model_text` 不作为 UI 解析协议。
+- 项目会话通过共享 CSS 阅读列对齐时间线与 composer，笔记 `NoteWorkbench` 在各编辑/预览 pane 内居中正文（最大 800px）；滚动仍归原有 viewport 所有，不重挂载编辑器或改动滚动跟随算法。Crepe 的默认正文内边距在笔记工作区内覆盖，避免编辑/预览内容宽度不同；横向溢出仅由代码/表格容器承接。
 - Chat UI 映射：助手消息阶段 `thinking → answering → done|error`；`reasoning_delta`+同 run 工具 → **Area A**；`message_delta` → **Area B**；`message_interim` 封存当前说明并开启下一段。Hermes 常发送 1～3 字符 delta，Adapter 在不改变顺序与正文的前提下合并相邻同类增量，Surface 再按语义边界与约 48～96ms 视觉帧提交；换行、句末标点、代码围栏和累计字符阈值可提前落屏，稀疏流也不得等待 260ms 后才逐字出现，非流式/终态事件立即落屏。Gateway 的模型正文、路径、URL 与 Markdown 原样透传，不再经过 SophoNote 正则“脱敏/改写”；仅结构化工具参数可在字段级移除凭据。流式答案拆为已闭合稳定 Markdown 块与活跃纯文本尾部：稳定块由 memoized renderer 渲染且后续 token 不重解析，活跃尾部只做换行保真的轻量展示，终态执行一次完整 Markdown 渲染。
-- `approval_required` / `clarify_required` 是阻塞当前 Hermes Session 的原生事件，不转换成新用户消息。Conversation Surface 将 `choices[]` 按事件顺序渲染为整行纵向决策列表；卡片保持可换行文案、序号、推荐/风险语义与底部自定义回答。一次/会话/拒绝可直接回传，`always` 等持久授权必须经过本地二次确认后才调用 `approval.respond`；提交中禁用重复操作，失败保留原卡片供重试。
+- `approval_required` / `clarify_required` 是阻塞当前引擎会话的统一事件，不转换成新用户消息。共享输入卡片使用当前 Thread 已绑定的引擎名称；审批/澄清仍按 `runId` 发送到对应运行的控制通道，不能根据界面文案选择执行引擎。Conversation Surface 将 `choices[]` 按事件顺序渲染为整行纵向决策列表；卡片保持可换行文案、序号、推荐/风险语义与底部自定义回答。一次/会话/拒绝可直接回传，`always` 等持久授权必须经过本地二次确认后才调用 `approval.respond`；提交中禁用重复操作，失败保留原卡片供重试。
 - Hermes 过程事件兼容层以 Gateway 的 `reasoning.delta`、`message.interim`、`tool.start|complete`、`message.delta|complete` 为现行标准；前端按 RunStore `seq` 聚合 Thought/Explored/Used。`reasoning.available` 若只是已输出 reasoning 的回标必须去重，`thinking.delta` 属于 spinner 状态而非推理正文，与 Hermes Desktop 一致地忽略。
 - 未知 schema/payload 不归约，进入显式降级；旧事件通过 serde default 保持兼容。
 
@@ -469,7 +458,8 @@ TextAnchor 必须唯一匹配。安全 rebase 仅在版本变化但锚点仍唯�
 | 文档元数据 | `articles` | 标题、类型、时间、内部 `version`；content 不作为正文真相 |
 | 文档安全 | `document_operations`、`document_revisions` | operation 审计/恢复与短期旧正文 checkpoint |
 | 项目 | `projects`、`project_documents` | 项目及文档单一归属/树关系 |
-| Agent | `agent_threads`、`agent_runs`、`agent_messages`、`agent_tool_calls`、`agent_approvals`、`agent_run_events` | 多轮、运行、工具、审批和恢复 |
+| Agent | `agent_threads`、`agent_runs`、`agent_messages`、`agent_tool_calls`、`agent_approvals`、`agent_run_events` | Thread 固定 engine 与外部会话引用；Run 记录实际引擎/版本；统一消息、工具、审批、事件恢复 |
+| 原生会话 | StorageLayout 私有 Hermes Home、`pi/agent/` 与 `pi/sessions/`、`claude_code/sessions/` | 各引擎独立历史，不作为 UI 恢复源或共享记忆 |
 | 历史 Skill/MCP | `skill_state`、`mcp_servers`、`mcp_tool_auth` | 兼容旧库与测试资产；产品能力目录、连接和授权不再从这些表读取 |
 | 资讯 | `sources`、`items`、`item_contents`、`stories`、`daily_picks` | 来源、元数据、正文证据、聚类/推荐 |
 | 组织 | `collections`、`collection_items`、`daily_logs`、`tasks`、`settings` | 收藏、日志、独立任务、配置 |
@@ -487,14 +477,14 @@ TextAnchor 必须唯一匹配。安全 rebase 仅在版本变化但锚点仍唯�
 - 正文成功写入才使 `articles.version + 1`；version 只增不减。
 - operation 的 `idempotency_key` 唯一，重入不得产生第二次副作用。
 - project tool 在读取/写提议前校验 `project_documents` 成员关系。
-- `projects` 是扁平容器，`project_documents` 表达一篇文档的单一项目归属，项目内文档树由成员关系中的 `parent_id` 表达；移出项目只解除关系。`project_delete` **级联永久删除**成员 Article/索引/Markdown（事务内清 DB 行含 revision/operation，提交后删文件）；仅双链引用、未列入成员关系的笔记不在级联范围。
+- `projects` 组织本地目录与会话；旧 `project_documents` 只保留兼容关系。`project_delete` 解除 Thread/Run 的 project_id、删除项目成员关系与元数据，保留 Article/Markdown、索引与本地文件；DEC-036 已替代旧级联删除。
 - 删除文章应同时清理文件、索引、项目关系和 revision/operation 孤儿；文章删除路径已在 `delete_article_rows` 同步清理 revision/operation。
 
 新版会话迁移目标（新增列必须经 `ensure_columns` 幂等补齐，当前尚未实现）：
 
 | 表 | 目标增量 | 用途与约束 |
 |---|---|---|
-| `agent_threads` | `scope_type TEXT NOT NULL DEFAULT 'project'`、`scope_id TEXT`、`pinned_at INTEGER` | 区分未归属会话/项目会话及列表置顶；现有 `project_id` 迁移为 `scope_type='project', scope_id=project_id` |
+| `agent_threads` | `scope_type TEXT NOT NULL DEFAULT 'project'`、`scope_id TEXT`（pinned_at/collection_id 已实现，不重复迁移） | 区分未归属会话/项目会话及列表置顶；现有 `project_id` 迁移为 `scope_type='project', scope_id=project_id` |
 | `agent_runs` | `scope_snapshot_json TEXT` | 固化每轮实际上下文、能力 profile 和引用版本；不能只依赖 Thread 当前归属恢复旧 Run |
 | `tasks` | `source_thread_id TEXT`、`source_article_id TEXT`、`project_id TEXT`（均可空） | 记录任务来源关系；任务正文/状态仍在 tasks，不复制会话或 Markdown |
 
@@ -552,7 +542,7 @@ TextAnchor 必须唯一匹配。安全 rebase 仅在版本变化但锚点仍唯�
 
 - Zustand persist 仅保存非敏感 settings、collections、activePage；API Key 不得进入 localStorage。
 - 内容正文、AI 结果和向量索引在 SQLite；hash 未变时避免重复 AI/索引。
-- `ResourceBudgetManager` 对知识/记忆增量占用执行跨进程 1 GiB 硬预算；物理内存只影响是否更早降级，不能放宽上限，也不按 memory-entry 数量直接换算内存。
+- 目标 `ResourceBudgetManager` 对知识/记忆增量占用执行跨进程 1 GiB 预算；当前未实现，不能把配置参数当作实测硬上限。物理内存不放宽目标，也不能按 entry 数量推算已达标。
 - Hot 只含目录/当前 Claim/小型 FTS 页；Warm 只含当前文档、固定资料和近期项目的 chunk/向量；Cold PDF/原文/历史 Git blob 不进常驻缓存。
 - SQLite page cache、FTS/catalog、向量页、检索/上下文工作区、导入/OCR/Embedding 批缓冲、Memory 候选/压缩、可选 Adapter 和本地 Embedding 进程均进同一总账；大范围 `mmap` 不得绕开 RSS 计量。
 - 压力降级顺序固定为：停止预取和 rerank → 暂停 embedding/影响作业 → 清 Warm LRU → 停可选 Adapter/本地 Embedding → FTS-only。编辑、精确 Anchor/Git 读取和导出不降级。
@@ -658,7 +648,7 @@ SophoNote 是本地单用户应用，不提供多实例高可用或服务端 SLA
 - React/WKWebView：不可信 UI 输入边界；所有路径、项目归属、版本和权限在 Rust 再校验。
 - Model：不可信建议生成器；只能看到 ToolGateway 暴露的工具，不能调用管理命令。
 - Skill：受限配置与提示，不执行任意脚本，不直接授予权限。
-- Hermes Runtime：不可信外部执行边界；MCP 连接、授权与命名空间隔离均由 Hermes 管理，SophoNote 不维护副本。
+- Agent 引擎：Hermes/Pi/Claude 均是受 Host 监督的外部执行边界；Hermes 的用户 MCP 连接与授权由其原生管理，Pi/Claude 仅暴露 Host 工具。Claude 的 loopback MCP bearer 按 Run 撤销，不作为全局 MCP 配置。
 - Browser Runtime：不可信网页与交互执行边界；页面内容可能进行 prompt injection，DOM/下载/表单/登录态均按外部输入处理，动作仍需 SophoNote Scope/Policy。
 - 用户授权 Workspace：高价值本地数据边界；授权根不等于全部工具可读写，路径、ignore、Secret、base hash 和权限模式由 Rust 逐次复核。
 - Terminal/Preview 子进程：可执行副作用边界；只允许 Host/Hermes 持有进程句柄和端口，WKWebView 不直接 spawn、signal 或连接任意本地端口。
@@ -669,15 +659,16 @@ SophoNote 是本地单用户应用，不提供多实例高可用或服务端 SLA
 - 文档和数据库默认本地；发送模型的上下文应最小化并由用户触发。
 - API Key 不进入日志、Agent event、ToolOutput 或 localStorage；MCP 环境变量值不回前端。
 - Provider Key 以 macOS Keychain 为真相源；旧 SQLite `apikey:*` 只作为一次性迁移源，并严格按“写入→回读一致→删除明文”执行。
+- 凭据存储统一经过 Rust `credentials` 边界：macOS 对现有 login Keychain 使用串行访问门禁，在普通读取、存在性查询、后台迁移和删除期间禁用 Keychain UI，退出时恢复原交互状态；只有显式保存允许系统授权。存在性检查读取属性而非密码，不触发迁移；WebView 仍只收到 configured/not_found。静默读取被拒时返回可操作的重新保存提示，不缓存为缺失；Hermes 启动跳过不可用供应商，Release 不从旧明文绕过拒绝。系统锁定/签名身份变化仍须在保存入口修复授权，不通过放宽 ACL 或 Release 明文回退消除提示。
 - 未签名 Debug 二进制遇到 Keychain ACL 拒绝时，允许在 `cfg(debug_assertions)` 内使用旧 `apikey:*` 位置作为显式开发回退；读取优先使用进程缓存/该回退，避免反复弹授权。Release 编译不存在此分支，仍按 Keychain 迁移失败即 fail-closed。Key 保存成功后重启 Hermes 属于第二阶段：重启失败记录独立诊断，但不能回滚或误报已经成功的凭据保存。
 - 设置页短期采用“输入即自动保存、保存后不清空当前组件值”的交互；输入值只存在当前 React 组件内存，不进入 Zustand persist/localStorage，页面刷新或应用重开后 Host 仍只返回 configured marker。设置页不提供删除 Key 入口。桌面确认框禁止使用被 `tauri-plugin-dialog 2.7.x` 初始化脚本改写的同步 `window.confirm`；统一使用 `@tauri-apps/plugin-dialog` 的异步 `confirm()`（实际走已授权 `message` 命令）或应用内确认组件。
 - `tauri.conf.json` 已启用 production/dev 分离的严格 CSP；Release 不允许 `unsafe-eval`、任意网络连接、frame 或 object。
 - MCP command/args/env 和 Skill 文件均需用户来源信任；路径校验禁止符号链接逃逸和目录穿越。
 - 只能读取用户明确授权的 Git 仓库与 ref；默认应用 `.gitignore` 和 SophoNote 排除规则，建立版本前执行凭据/大文件扫描。`push`、修改 remote、删除 ref、rebase/reset/checkout 等操作默认不对 Agent 开放；恢复只生成可预览 Patch。
 - Browser Profile/Cookie/密码/表单 Secret 不进入 SQLite、Zustand、RunStore 正文或模型上下文；截图/DOM 引用按最小范围和生命周期保存，页面下载先进入受控临时区。
-- WorkspaceBinding 使用可撤销授权；所有路径 canonicalize 后必须仍处于授权根。代码写入只能通过 CodeChangeService，Terminal cwd 也必须重新验证，权限规则不能只由前端隐藏按钮实现。
+- 当前 WorkspaceBinding 保存用户所选目录与权限，Rust 复核 canonical path；Pi/Claude 文件工具和命令受本轮 Scope 约束。完整 security-scoped access/撤权审计与 CodeChangeService 为 BC-0/2 后续，不能只靠前端隐藏按钮代替。
 - 文档写入、删除、资产 GC、MCP 删除等高影响动作需明确 UI 意图和二次确认。
-- 全局 Agent 入口不得使用前端当前页面作为隐式授权；`ScopeSnapshot`、项目归属、实体版本和工具集合都由 Rust 复核并写入 Run 审计。
+- Agent 入口不得使用前端页面作为隐式授权；当前 Run 内校验已实现，持久 ScopeSnapshot/跨域工具 profile 仍按 NEXT-031/035 实施。
 - 会话归属项目会改变后续可见资料与记忆键，属于权限边界变更：只允许用户显式触发，非终态 Run 期间禁止，摘要/成果/资料的记忆写入分别确认。
 - 嵌入面板或 ContextHandoff 默认只提交当前 focus/selection 和有界候选 ID；“知识库全部资料”“笔记本全库”等宽范围必须有可见 scope chip、检索预算和来源记录。
 - 通用 AGUI 只渲染 SophoNote allowlist schema，不接受模型返回的任意 HTML/JS、命令、路径或事件处理器；组件动作仍回到 Tauri Command + Policy。
@@ -710,7 +701,8 @@ SophoNote 是本地单用户应用，不提供多实例高可用或服务端 SLA
 4. **App Shell 与 IA（P1A-3）**：上线六个一级产品域、统一 Header、工作室/笔记本嵌入面板与对象级 ContextHandoff；运行状态归属会话列表/消息，深度解读/任务仅改变入口，不迁移或复制正文数据。
 5. **作用域与工具策略（P1A-4/P2）**：各页面提供 ScopeProvider，Rust 固化 ScopeSnapshot；完成 ToolContext/Policy/Approval 后才开放任务、日历、提醒等副作用。
 6. **Agent Go（P1B）**：真实 Provider+Skill+MCP+Patch 宿主整场；与 Hermes 迁移可并行但不得挤占写作验收。
-7. **Hermes 执行平面收口（P1B 战略，DEC-011/019/020）**：`AgentEngine` 抽象 → Gateway Session Surface → Hermes 原生能力发现/事件 → Hermes-only 产品路径 → 历史 Runs/Bridge/Rig 迁移依赖清债。细节见 §23.1.6～§23.1.9。
+7. **多引擎执行平面收口（DEC-053）**：共享配置/会话/事件与权限，原生协议、历史和更新策略独立。Hermes 原生能力继续按 §23.1 专项维护，Pi/Claude 回归和发布证据见 NEXT-075；历史 Rig 清债不影响当前三引擎调度。
+
 8. **产品域闭环（P2）**：发现关注工作站、后台长期记忆/RAG、工作室项目聚合、工具任务来源关系与跨域显式工作流；长期记忆不成为页面域。
 9. **轻量版本证据基础（P1C）**：先上线 ResourceBudgetManager、Hot/Warm/Cold 分层、FTS-only 降级、受管 notes 仓库、语义版本和 EvidenceAnchor；向量只扩到活跃工作集，再开放 Claim/Decision、ChangeImpact 与 Memory evidence binding。
 10. **按测量演进**：若 P0 后长文仍不达标，再引入 Worker 预处理、块级增量预览、视口虚拟化或持久关系索引。
@@ -945,9 +937,9 @@ DMG/updater 产物进入 `src-tauri/target/release/bundle/`，独立应用包在
 7. **密钥与模型**：Provider Key 从 SophoNote Keychain 的短期运行注入获取，sidecar 不持久化；移除开发 `.env.hermes.local` 依赖。
 8. **平台安全**：macOS 主 App、嵌套 sidecar/动态库按由内到外顺序签名；补 entitlement、收紧 CSP、notarize 并 staple。Windows 有 Authenticode 证书才签 NSIS；无证书只出 unsigned pack。
 9. **架构与最低系统**：分别构建并实际验证声明的架构；macOS `minimumSystemVersion=12.0`；Windows 依赖 WebView2（安装包可引导下载）。未在对应宿主验证的架构不得进入同一发布声明。
-10. **Hermes-only 故障语义**：Runtime 不健康时明确失败并保留 RunStore 终态，不得改走历史 Rig；历史 Rig 依赖可在夹具迁移后独立删除。
+10. **Hermes 故障语义**：Runtime 不健康时明确失败并保留 RunStore 终态，不得改走历史 Rig；历史 Rig 依赖可在夹具迁移后独立删除。
 
-Debug 构建可显式设置 `SOPHONOTE_HERMES_GATEWAY_URL/TOKEN` 附着本机 Runtime。Release 构建忽略这组环境变量，只从应用 resource 目录的 `hermes/<target>/` 解析 Manifest 并由 Host 拉起；不存在机器 Hermes 回退。包内 Runtime 不存在、哈希不符或健康检查失败时，Hermes-only Run 明确失败。
+Debug 构建可显式设置 `SOPHONOTE_HERMES_GATEWAY_URL/TOKEN` 附着本机 Runtime。Release 忽略这组环境变量，只使用通过完整性/健康检查的私有 Hermes 更新槽或随包 `hermes/<target>/`；不回退机器全局 Hermes。更新槽失效回退随包，二者均不可用则该 Hermes Run 明确失败，不切换 Pi、Claude 或 Rig。
 
 #### 17.5.1 Hermes Sidecar 私有更新槽（DEC-050）
 
@@ -961,24 +953,33 @@ Debug 构建可显式设置 `SOPHONOTE_HERMES_GATEWAY_URL/TOKEN` 附着本机 Ru
 
 设置导航与标题统一为「Agent 配置更新」。Pi 使用 `runtime/pi-sidecar/versions/<version>-<digest>` 私有不可变槽：只接受 earendil-works/pi 官方 stable Release 的固定平台资产及 SHA-256 digest，下载/解包有大小和路径门禁，拒绝链接，加入当前宿主权限扩展并验证离线 RPC `sophonote_host_ready` 能力后生成文件哈希；原子写 active 指针，后续 Run 重新解析并校验，现有 Run 持有旧绝对路径。损坏指针/资源不影响随包执行且在状态中保留回退原因，不因模型请求失败自动降级历史。Claude Code 更新与启动共用进程内互斥门禁，更新前查询未终态 Claude Run，阻止并发 claim；根据规范路径识别官方 native launcher、npm/pnpm 官方包或 Homebrew cask，使用固定 argv 调用官方更新器，有时限且不继承模型密钥，结束后重新定位并校验 CLI 版本。自定义路径/未识别安装不猜测执行包管理器。两者通过同一 Host DTO 和进度事件投影到设置卡片，Hermes 原更新契约保持兼容。
 
-#### 17.5.2a 多执行 sidecar 与火山 OpenViking（DEC-053）
+#### 17.5.2 三引擎运行与更新（DEC-053）
 
-`agent_threads.engine` 缺省 `hermes`，首次 Run 前可选择 `pi`，首次 Run 后不可修改。Run 始终记录实际引擎；模型配置共用 Host ProviderSnapshot/Keychain。三种引擎共用模型选择偏好与回复组件；切换引擎保持可用的当前模型，流式正文、思考、工具、错误和最终回复由 Rust 适配为同一事件契约，不维护独立聊天页面。Hermes 保留 Gateway WS，Pi 使用官方 0.85.1 可执行分发的 stdin/stdout JSONL RPC；适配器将真实事件写入现有 DurableFirstTransport，前端不接触运行时协议。Pi 每轮启动受控进程并打开稳定的私有 Session 文件，结束/取消回收进程，宿主丢失后的在途轮次明确 interrupted；下一轮仍打开原会话。未知引擎、不可用运行时与不可用能力均明确失败，不跨引擎回退。Composer 引擎菜单保持可打开；草稿直接改选择，已绑定或正在恢复/执行的会话选择另一引擎时复用新建会话流程，成功后才更新草稿引擎并恢复未发送输入与附件；失败保留原绑定。
+三引擎选择/模型/回复契约见 §23.1；产品入口为「设置 → Agent 配置更新」。各卡片独立查询状态并提供版本、来源、进度、失败原因与重试，不因一个引擎不可达阻塞整页。
 
-Claude Code 引擎标识为 `claude_code`，复用 sidecar Run claim、冻结 Scope、事件持久化、审批邮箱和文档工作副本边界。Rust 定位并验证本机官方 CLI，以 `--bare --print --input-format stream-json --output-format stream-json --include-partial-messages` 启动；关闭内置工具、全局/项目配置及 skills，仅注入按 Run 创建、带随机 bearer 的 loopback MCP 工具服务。工具效果全部回到 Rust，沿用 Ask/AutoEdit/Plan 与命令沙箱。只给子进程注入当前供应商凭据；已配置的 DeepSeek 官方 HTTPS 端点（根路径或 `/v1`）可在 Claude Code 专用快照中转换为同域 `/anthropic`，保留供应商 ID、模型白名单与用户存储配置，第三方代理不猜测改写。Pi 使用原 OpenAI 配置。模型投影不枚举/读取 Keychain，避免未使用供应商的系统授权阻塞；前端模型与运行时状态独立发布，并有超时和重试；私有 HOME/CLAUDE_CONFIG_DIR 隔离原生会话，使用稳定 UUID 续接，不读取个人 Claude 登录。取消/结束撤销 MCP 服务并回收进程组，恢复孤儿 Run 时标记 interrupted，不连接 Hermes。Claude Code 独立版本检测，不要求安装 Pi；首版不再分发 CLI。
+| 引擎 | 来源与验证 | 生效时机与运行隔离 |
+|---|---|---|
+| Hermes | 随包钉扎版本；官方 stable Release 构建私有槽，详见 §17.5.1 | 待启用版本在下次启动验证健康后启用；失败回退随包 |
+| Pi | 官方平台独立归档；校验官方 SHA-256、128 MiB 下载/512 MiB 解包上限、拒绝链接与越界路径，加入 Host 权限扩展，签名及离线 RPC 健康检查后生成逐文件清单 | 原子切换私有 active 指针，下一 Run 解析新槽并记录版本；旧 Run 保留旧路径，损坏槽回退随包 |
+| Claude Code | 本机官方 CLI；识别 native、npm/pnpm、Homebrew cask，使用固定 argv 调官方更新器；自定义来源只提供手动更新 | 更新与 Claude Run claim 互斥，180 秒时限并清理进程组；成功后复核版本、下一轮使用；影响本机共享 CLI，UI 明示 |
 
+Pi 资源位于 `resources/pi`，私有更新位于 `runtime/pi-sidecar/versions`；配置与稳定 Session 在 StorageLayout 的 `pi/`，不要求用户全局 Node/Pi，不加载全局配置或未授权扩展。Claude 使用独立 HOME/CLAUDE_CONFIG_DIR、稳定 UUID 与私有历史；当前不再分发 CLI。它以 `--bare --print --input-format stream-json --output-format stream-json --include-partial-messages` 启动，关闭内置工具、全局/项目配置、plugins/hooks，按 Run 创建带随机 bearer 的 loopback MCP，仅注册 Rust 允许的工具；结束/取消撤销服务并回收进程组。
 
-Pi 包内资源按目标平台钉扎官方归档 SHA-256，应用资源完整性清单校验通过才启动；私有配置/Session 统一放在 StorageLayout 根的 pi/，禁止加载用户全局配置或工作区未授权扩展。Host 配置通过进程私有环境注入，模型和云端密钥不写 JSON 或日志。工具权限扩展按每轮冻结的本地工作目录与权限模式执行；notes/ 不授予原生工具写权，文档/选区采用临时工作副本并通过现有 DocumentService preview 生成审阅 Diff。Pi 不解析 Hermes 项目操作指令；macOS 命令须逐次批准并受 sandbox-exec 写入边界和 60 秒超时约束，Windows 首版不注册 bash。
+Pi/Claude 共用 Rust 文件审批与 macOS 命令沙箱（逐次批准、60 秒超时）；Pi Windows 首版不注册 bash。`notes/` 不授予原生工具直接写权，当前文档/选区只经临时工作副本产生 DocumentService dry-run Diff；不解析 Hermes 项目 actions。
 
-**后续阶段，当前 Pi 未接入云端记忆：** OpenViking 使用火山托管 endpoint（HTTPS，保留 /openviking base path），Host settings 保存共享非密钥连接投影与启用态，Keychain 使用 openviking-memory。Hermes 适配原生 memory.openviking，Pi 加载钉扎的 OpenViking 官方扩展；不能把配置保存冒充云端记忆已验证。同身份默认共享须在 UI 显示；跨引擎会话 ID 仍隔离。停用不删除远端记忆；Pi 下一轮读取配置，Hermes 已有会话需显式重启。现有 Hermes-only/Memory 所有权表述以此双引擎决策为准，Cron 仍归 Hermes，Native Lite/文档真相源不变。
+火山托管 OpenViking 配置与云端记忆浏览编辑已接入（§17.5.3）；Hermes 使用原生插件，Pi/Claude Code/OpenCode 由 Rust Host 在共同 Run 入口执行召回和成功轮次同步，凭据共用而 peer 范围分开。不能把配置保存、健康检查或本地会话续接宣称为跨引擎云端召回；不启动本地 OpenViking 服务。
 
-#### 17.5.2 OpenViking 原生记忆配置
+#### 17.5.3 火山云端记忆配置与编辑
 
-`Settings → OpenVikingSettingsPanel → Tauri agent_openviking_* → Rust agent/openviking → Hermes Dashboard`。读取 `/api/memory` 与 `/api/memory/providers/openviking/config` 后，只投影固定字段与状态；保存非密钥字段使用 `PUT /api/memory/providers/openviking/config`，停用使用 `PUT /api/memory/provider` 切回空 provider（内置）。保留 Runtime 已有召回参数，不安装插件依赖，不修改签名资源，不创建 SophoNote Memory 正文副本。
+协议依据：[官方云端 CLI 配置](https://github.com/volcengine/OpenViking/blob/main/docs/zh/getting-started/05-cli-setup.md)、[内容 API](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/content.py)。
 
-API Key 使用独立 Host provider `openviking-memory`；保存不触发通用模型凭据热重启，在下次 Sidecar 启动以 `OPENVIKING_API_KEY` 注入。外置 Debug Gateway 无法获得受控注入，配置面明确拒绝管理；私有 Home 若存在旧环境/ovcli 覆盖，也应明确拒绝含糊保存。用户通过独立重启操作使已有会话切换配置，保存本身不停止 Run。Hermes 更新导致 Home 版本隔离时，以当前 Runtime 配置为准，不伪造跨版本配置迁移。
+`Settings → AIProviderSettingsPanel（记忆）→ OpenVikingSettingsPanel → Tauri agent_openviking_* → Rust agent/openviking`。服务固定为 `https://api.vikingdb.cn-beijing.volces.com/openviking`，仅配置 API Key；Host provider 为 `openviking-memory`，凭据不进入 YAML、源码、日志或状态 DTO。管理页面通过 Rust 直连云端 `/api/v1/fs/ls`、`/api/v1/content/read`、`/api/v1/content/write`；限定 `viking://~/memories` 与 `viking://~/peers/hermes/memories` 及 Pi/Claude Code/OpenCode 三个固定 peer 的 memories 根范围，拒绝路径穿越/编码歧义及其它目录，分页和正文均有界，HTTP 禁止重定向。revision 对原始全文（含服务端 MEMORY_FIELDS）计算摘要；编辑/写入只提供正文，避免云端重复附加元数据；回读核验正文，保留新的完整 revision。保存先重读比对，冲突保留草稿。Host 串行编辑与配置变更，但上游 write 尚无原子 CAS，仍存在外部客户端在检查后修改的竞争窗口；不把本地互斥描述成服务端锁。
 
-连接测试只访问用户指定 endpoint 的 `/health` 和只读 `/api/v1/system/status`，先匿名确认 OpenViking 身份，再发送 `X-API-Key`，无 Key 时发送账户/用户头；Agent 头与原生插件一致。HTTP 客户端拒绝重定向、有超时与响应体上限；localhost 绕过系统代理。原生插件负责记忆同步/提取/召回，启用须确认会话外发及同身份共享。Host 不启动 OpenViking 服务；上游插件在本机已安装 `openviking-server` 时可能尝试自启，其生命周期不属于本功能交付，不将这种情况宣称为 Host 托管或通过资源门禁。
+Hermes 继续持有原生 Provider 非密钥配置，使用正式 `/api/config` 深合并固定 cloud endpoint、provider 与 `memory_enabled=false` / `user_profile_enabled=false`，保留召回参数，关闭内置记忆读写。受管 Sidecar 启动也固定关闭本地 MEMORY/USER 开关，旧本地 OpenViking endpoint 不再激活；不迁移/删除旧正文。停用只清 provider 且保持这两个开关关闭；不删除旧记忆，不调用 reset。保存不自动重启，下次 Sidecar 启动仅注入 Key；已有 Run 由用户选择空闲时重启生效。钥匙串暂不可读时不阻塞 Hermes 启动，仅停止提供云端记忆凭据；记忆页面显示重新保存授权提示，内置记忆仍关闭。外置 Debug Gateway 或旧 .env/ovcli 覆盖明确拒绝含糊管理。
+
+连接测试使用带鉴权的只读云端目录请求，不要求匿名 `/health`；火山固定端点通过 HTTPS 校验证书。云端错误与未配置显式呈现，不启动本地服务或创建本地 Memory 正文副本。Hermes 随包构建在计算校验清单前应用受控补丁 `scripts/patch-hermes-cloud-memory.py`：仅固定官方火山云端地址的运行时健康门禁使用带 Key 的目录检查（托管服务匿名 /health 返回 401）；其它地址保留上游逻辑，失败不降级本地。原生 Hermes 插件负责其自动同步/提取/召回，另外三个引擎由 Rust Host 接入；页面连接检查与自动记忆链路分别验收。编辑器不处理 SophoNote 受管笔记，后者仍只能通过 DocumentService Patch 写入。
+
+四引擎扩展：`memory.sophonote_engines` 保存明确授权的 Host 引擎列表（旧配置缺省为空），Hermes 继续原生插件；Pi/Claude Code/OpenCode 共用 `pi::start_engine` 的云端记忆前后置处理。开始前 `/search/find` 查询公共用户和本引擎 peer memories，结果 URI 归一化后严格限域、读取有界参考文本，包裹为不可信资料。成功后用唯一 Run ID 创建云端 session，写入原始 user/final assistant 两条消息并 commit；云端提取异步，不把 commit 成功宣称为召回成功。HTTP 与总耗时受限，失败只产生脱敏诊断。未保存切换使用应用内原生 HTML dialog 等待明确选择，不依赖 Tauri 的异步 window.confirm shim。配置代次在密钥替换/停用时递增；写入阶段与保存互斥并复核代次，避免在途 Run 向新库同步。管理目录根据所选 peer 使用对应 actor header，公共用户记忆可跨引擎读取。
 
 ### 17.6 签名、公证与安装验证命令
 
@@ -1048,7 +1049,7 @@ CI 入口为 `.github/workflows/pack.yml`：`macos-14` 打 Apple Silicon pack，
 
 - 对外宣传官网与客户端源码在同一仓库维护，站点源码固定放在 `website/`，不得覆盖根目录的 Vite `index.html`，也不得把营销站源码混入承担真相源职责的 `docs/`。
 - `sophonote.com` 是正式域名；`website/CNAME` 是 GitHub Pages 自定义域名声明，DNS 仍由域名服务商配置。Pages 只发布 `website/` 静态文件，不发布客户端构建目录、私有运行数据或本地验收截图。
-- 官网使用无框架的静态 HTML/CSS/JavaScript，保持无后端、无 Cookie、无站内账号。宣传内容必须以 PRD、架构和台账为事实边界；目标能力明确标注路线图，社区预览不得描述为已签名 RC。
+- 官网使用无框架的静态 HTML/CSS/JavaScript，保持无后端、无 Cookie、无站内账号。2026-09-19 官网更新围绕四引擎、项目任务和可选云端记忆组织内容；产品示意明确标注为示意，不复用含私人数据的宿主截图。下载显示实际 Release 版本、平台和大小，网络超时回退 Releases；安装要求与云端记忆数据流直接说明。宣传内容必须以 PRD、架构和台账为事实边界；目标能力明确标注路线图，社区预览不得描述为已签名 RC。
 - macOS 下载按钮只引用 `MarkingYang/sophonote` 的 GitHub Release 资产。前端通过 GitHub Releases API 查找最新 `.dmg`，优先 Apple Silicon 资产；没有公开 Release 或请求失败时退回 Releases 页面，不伪造本地下载地址。
 - `.github/workflows/pages.yml` 负责从 `main` 部署官网；`.github/workflows/pack.yml` 在版本标签构建完成后把 DMG/NSIS 作为 GitHub prerelease 资产发布。无 Developer ID/Authenticode 的产物继续明确标为 community preview，不得标记为正式 RC。
 
@@ -1060,7 +1061,7 @@ CI 入口为 `.github/workflows/pack.yml`：`macos-14` 打 Apple Silicon pack，
 | React/Zustand | 粗粒度订阅、StrictMode 双 effect | selector/useShallow、in-flight 锁、Profiler |
 | SQLite/sqlite-vec | 文件/DB 原子性、vec 查询约束、schema 演进 | operation 补偿、先 vec 后回表、幂等迁移 |
 | Rig 0.41 | 上游 API/toolchain 变化；迁移期双跑成本 | 精确锁版、Adapter 隔离；DEC-011 完成后删除 |
-| Hermes Runtime（目标） | 进程崩溃、协议漂移、能力面过大、包体/签名 | 环回+Token+Lease；禁用危险 toolset；唯一 MCP Bridge；版本锁定+哈希；黄金任务回归 |
+| Hermes / Pi / Claude Code | 进程崩溃、原生协议漂移、工具越权、包体/安装来源 | Host 生命周期、协议适配、能力限制、版本/来源验证、Rust 审批和真实模型回归；独立失败，不跨引擎回退 |
 | rmcp 3.1.2 | 协议/外部进程/命令注入风险 | client-only、stdio、显式配置、默认拒绝、超时；目标经 SophoNote Bridge 转发 |
 | Provider | 成本、延迟、隐私、限流、模型行为变化 | 统一 Gateway、预算、取消、聚合指标、最小上下文 |
 | 内容来源 | API 限流、网络可达性、页面变化 | 节流、镜像、partial/failed、质量门禁 |
@@ -1153,7 +1154,7 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 
 ### 21.4 Hermes sidecar 上线与回滚
 
-1. 内部构建与正式产品均固定 Hermes；同一 Run 只允许该引擎拥有终态。历史 Rig 仅能由 Rust 测试直接调用。
+1. 内部构建与正式产品均按 Thread 固定 Hermes/Pi/Claude Code；同一 Run 只允许所选引擎拥有终态。历史 Rig 仅能由 Rust 测试直接调用。
 2. 更新时先校验新 sidecar 的签名、版本和 SHA-256，再启动新版本；健康未就绪不得接收 Run，也不得覆盖旧 Runtime 数据域。
 3. 已开始的 Run 不跨 sidecar 版本热迁移。更新/退出前取消或等待终态，无法对账则写 `interrupted`，禁止猜测 completed。
 4. 新 sidecar 启动失败时必须产生 `engine_degraded`/可见错误并落失败终态；发布回滚只能切回上一已签名 Hermes sidecar，不得切换 Agent 引擎。
@@ -1182,7 +1183,7 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 14. 项目工具能读取成员文档，但完整项目级 RAG、ContextAssembler、token 预算和引用式回答链路尚未实现。
 15. Skill 的 `workflow` 枚举已存在，但 `daily-picks` 的确定性 workflow executor 尚未完成；当前不能把清单类型等同于工作流引擎。
 16. 循环任务字段、notes 目录自定义迁移、全局快速记录快捷键、论文 PDF 解析和 ModelScope 均不构成已交付能力。
-17. “删除项目”已决策为级联永久删除成员文档（ISSUE-013 / DEC-010）；UI 须列清单二次确认，双链非成员笔记不级联。
+17. 删除项目已按 DEC-036 改为解除关联并保留正文/会话；旧 DEC-010 的级联删除语义不再适用。
 18. Debug 可用 `SOPHONOTE_HERMES_*` 附着外部 Runtime；Release 明确忽略这些变量，只使用 `.app/Contents/Resources/hermes/<target>`，缺失或 hash 不符即拒绝启动。
 19. Sidecar、资源解析、版本/逐文件 SHA-256、嵌套签名顺序、私有 `HERMES_HOME`、生命周期和隔离 HOME 冒烟已完成；尚缺真实 Apple 公证请求/staple 证据与独立干净 macOS VM D4/D5 记录。
 
@@ -1190,81 +1191,52 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 
 本节补足总体架构无法展开的七条关键链路。内容已对照当前代码、历史设计与 2026-08-18 知识库需求核验；“目标”项仍需按项目台账推进，不得当作已完成。
 
-### 23.1 Agent Runtime：Hermes-only 产品执行平面
+### 23.1 Agent Runtime：统一 Host 与四种执行引擎
 
 #### 23.1.1 选型与边界
 
-**当前产品路径（DEC-019 / DEC-020）**：Hermes 是唯一 Agent 执行引擎，SophoNote 是 Hermes 的正式 Client Surface。Release 由 Host 启动并连接包内 Gateway；Debug 才可优先连接显式 `SOPHONOTE_HERMES_GATEWAY_URL`。两者均使用 `session.create/resume`、`prompt.submit`、原生附件、模型切换、取消、审批、澄清与完整事件；Runtime 不健康时明确失败。旧 Runs API 仅作迁移兼容，不再承担能力对齐标准。
+**当前产品路径（DEC-053）**：SophoNote 提供统一产品控制面，Hermes、Pi、Claude Code、OpenCode 提供按会话选择的执行平面。`agent_threads.engine` 为 `hermes | pi | claude_code | opencode`，历史数据默认 Hermes；首次 Run 后不改绑。Composer 的另一引擎选择复用新建会话流程，成功后恢复草稿/附件。项目归属只改关系，不迁移原生 Session。
 
-**历史 Rig 边界**：Rig `AgentRun`、Adapter 与双跑夹具可暂留作未注册的工程测试资产，但不得由 Tauri 产品命令、设置或故障恢复路径触达。物理删依赖是清债，不再是切换产品默认值的前置条件。
+| 层 | 当前实现与所有权 | 边界 |
+|---|---|---|
+| 会话 UI | `ProjectChatPanel`、`AgentEngineControl`、`useSidecarConfig`、`agentStore` | 一套输入、模型菜单、正文/思考/工具/审批/错误/终态渲染 |
+| 配置与凭据 | `ai_config` + Keychain；Host 校验 provider/model 白名单，发送时读取所选凭据 | 不建第二套引擎模型设置；不把密钥写入日志、argv 或原生长期配置 |
+| Hermes | `hermes/attached_engine.rs` 等；JSON-RPC/WebSocket Gateway，`session.create/resume`、`prompt.submit` | 随包或已验证私有槽；Debug 可显式附着，Release 不用全局 Hermes |
+| Pi | `pi/transport.rs`；每轮受控进程，stdin/stdout JSONL RPC | 随包官方程序，稳定私有 Session；不依赖全局 Node/Pi |
+| Claude Code | `claude/transport.rs`；官方 CLI stream-json，逐 Run loopback MCP | 本机官方 CLI，隔离 HOME/原生历史；不使用个人订阅登录、全局插件/hooks |
+| 事件与恢复 | 各 Adapter → `AgentEvent` v4 → DurableFirstTransport → RunStore → Channel | 不向前端泄漏原生协议；先落库后展示；恢复差异见 §7.4 |
+| 工具与文档 | Rust 冻结 Scope、审批/沙箱；文档工作副本经 DocumentService dry-run/CAS/hunks | Pi/Claude 复用 Host 工具，不执行 Hermes 项目 actions；无 notes 直接写旁路 |
+| 原生扩展 | Hermes Skill/MCP、Browser、电脑控制、Cron、Memory | 不把 Hermes 管理面声明为三引擎通用；Claude 内部工具桥不等于用户 MCP 管理器 |
 
-**正式发布实现（DEC-011 / DEC-020）**：Hermes 提供 Agent 执行平面，并作为 Skill/Tool/MCP/Browser 的能力真相源；SophoNote 保留产品领域权限、文档审批、`.md`、SQLite、RunStore 与审计。钉扎 Sidecar 已随包且 Release 无机器 Runtime 回退；正式对外 RC 仍以 Apple 公证与干净 VM 验收为 Go 门禁。
+历史 Rig `AgentRun`、Adapter 与双跑夹具只供工程验证，不注册 Tauri 产品命令或任何运行时回退。现有 Hermes `AgentEngine` trait 不强行扩展成三引擎统一实现：Pi/Claude 共用 `pi/mod.rs` 的 Run 准备/claim，再进入各自 Transport。统一的是业务契约和产品体验。
 
-| 层 | 当前实现 | 目标（Hermes） | 明确不承担 |
-|---|---|---|---|
-| `ModelGateway` | Completion / 非 Agent AI 继续走 Gateway | Hermes Agent 路径消费 Host 注入的 `modelRoute`；正式包改为短期凭证注入 | Hermes 不持有用户 Keychain 长期密钥面；**无第二套 Provider/Key 设置** |
-| `agent/adapters.rs` | Rig 消息纯转换 | 由 `hermes/event_mapper.rs` + Transport 取代生产路径 | 不把 Hermes/Rig 类型写入 DB |
-| `agent/run_controller.rs` | 历史 Rig Spike/测试循环 | 产品 Run 只经 Hermes `AgentEngine`/Adapter 调度 | 不注册为产品回退；不直接写 Markdown |
-| Tool / MCP | 旧本地 `McpManager` 仅作未注册测试资产 | 外部 MCP 统一由 Hermes 管理；SophoNote 领域能力未来通过可验证的 **SophoNote MCP Bridge** 挂载 | 不注册第二套本地 MCP；能力凭据不写进自然语言提示 |
-| Session / Memory | Thread 仅有本地消息历史 | 每个产品 Thread 显式创建并绑定一个 Hermes Session；长期记忆以 global/project 级 `X-Hermes-Session-Key` 交给 Hermes，后续增加 document scope | 不在 SophoNote 建第二套长期记忆；不同 scope 不静默共享 |
-| `RunStore` | 规范真相源 | **仍为** UI/事件恢复唯一真相源；保存 Hermes 外部引用用于对账 | 不把 Hermes Session DB 当 UI 恢复源 |
-| Skill / DocumentService | SophoNote 仍有历史 Skill UI | Agent Skill 由 Hermes 原生发现、`skill_view` 与 slash invocation 承担；写正文仍唯一经 DocumentService | SophoNote 不注入 Skill 正文；Skill 不能扩大权限；无旁路写文件 |
+OpenCode 扩展（2026-09-18）：第四引擎 `opencode` 使用钉扎官方 standalone 二进制，通过本机认证 HTTP/SSE 原生 Server 协议执行；每个 Thread 独立私有 HOME/XDG 与原生 Session。禁用项目配置、共享、自动更新、原生工具和外部扩展，只接入每 Run 临时令牌保护的 Rust MCP 工具桥，沿用 Pi/Claude 的 Scope、审批、取消、RunStore 和文档工作副本回收。配置与所选凭据只通过子进程环境传递，原生 Session ID 在私有目录保存。更新随应用发布；首版不增加独立在线更新器。空 Thread 创建与 Hermes 就绪解耦，首次 Run 检查所选引擎。
 
-Surface 数据契约：
+笔记发送契约补强（ISSUE-033）：当前文档 chip 是本轮附件承诺，空正文仍生成工作副本；发送前解析失败时停止。已有聊天文章可从每条完整回答下的“写入当前笔记”明确请求保存；Host 按 runId 读取已完成回答并绑定点击时文档的 baseVersion/全文基线，空笔记填入、有正文则追加，经 DocumentService 生成 Diff。此操作不调用模型、不截断或猜测文章边界，不自动覆盖已有正文。存在选区或未完成提案时暂不显示此入口。
 
-- SophoNote 只保存 Hermes 的 `stored_session_id`，运行时 `session_id` 只在当前 WebSocket 生命周期内使用。
-- 用户原文只经 `prompt.submit.text` 发送一次；不回放 SophoNote 最近 20 条历史，不再由 Host 拼接 system/persona/回答格式。
-- 图片/文件分别调用 `image.attach_bytes` / `file.attach`，随后提交 Hermes 返回的引用；URL 是用户输入中的显式引用，不附加行为指令。
-- 模型通过会话级 `config.set(key=model)` 选择；Memory、Skill、工具循环和会话历史由同一个 Hermes AIAgent 持续维护。
-- `thinking.delta`、`reasoning.delta`、`status.update`、`tool.start/complete`、`approval.request`、`clarify.request`、`message.delta/complete` 原样进入 Surface Adapter，再映射为稳定的 SophoNote AgentEvent；未知事件保留可诊断信息但不得伪造成答案。
-- SophoNote 项目、文档、SelectionSnapshot 与权限不写成行为提示词。它们经 MCP resource/tool 与每轮 ScopeSnapshot 进入能力面；在上游尚不支持 per-session capability context 前，项目写工具保持关闭或使用 Host 可验证的通道，不得退回“让模型复制 leaseId”的设计。
+#### 23.1.2 模型与 Run 契约
 
-依赖：历史测试暂继续锁 `rig-core`/`rig-agent = 0.41.0` 与 `rmcp = 3.1.2`；它们不注册进生产 Agent/MCP 产品路径。Hermes 二进制随应用签名分发、版本锁定并做哈希校验。业务 DTO、SQLite、前端 store、Tauri 事件不得依赖 Rig/Hermes/rmcp 框架类型。
+模型来源只有 SophoNote 设置。Hermes 通过配置同步与原生 `model.options` 解析可用目录；Pi/Claude/OpenCode 从非密钥配置快照投影支持的 provider/model，不逐供应商读取 Keychain。OpenCode 与 Hermes 均使用 `get_cached_api_key(app, provider_id)` 获取同一 Host 凭据，例如 `deepseek`；OpenCode 内部 `sophonote` 只是运行时适配名，不是新的凭据身份，也不读取另一套 OpenCode 登录或密钥配置。只有发送所选供应商时才读取凭据；运行时探测与模型列表独立加载、超时可重试。共享偏好仍使用兼容键 `sophonote.hermes.provider/model`，名称不代表仅 Hermes 可用。
 
-目标架构图（交互式）：
+Pi 接受 `openai` 与 `anthropic` 协议；Claude 接受 `anthropic`，以及对官方 HTTPS DeepSeek 根地址或 `/v1` 的明确兼容。Claude 专用运行快照把它映射为同域 `/anthropic`，保留 provider ID、模型白名单和同一 Key，不改用户保存的 base URL。其他 OpenAI 端点或第三方代理不能猜测转换；不支持时明确提示。
 
-- [Hermes 目标架构 HTML](./hermes-runtime-architecture.html)
-- [Archify 源](./hermes-runtime-architecture.archify.json)
+Agent 的模型 HTTP 由受 Host 监督的所选引擎发出，非 Agent Completion 使用 Rust ModelGateway；共享配置不等于统一 HTTP 代理。Host 仅传本轮必要配置、用户输入与显式上下文，不复制整段 UI 历史，也不注入人为回答格式或虚构执行步骤。
 
-当时 B′ / Rig 选型证据已备份到仓库外，不得覆盖 DEC-011。
+主控制流见 §7.4，作用域冻结见 §7.5，文档 Patch 见 §7.6。三引擎事件均遵守 RunStore-first；相邻增量可无损合并，阶段说明与最终答案分开保存，最终消息和终态各只完成一次。正文不做正则改写；模型未提供思考/工具事件时不能伪造。
 
-#### 23.1.2 产品 Run 控制流
+Hermes 原生会话持续由 Gateway 管理；Pi/Claude 每轮启动进程并打开各自稳定历史。宿主恢复时 Hermes 原生状态可对账，Pi/Claude 孤儿 Run 明确中断；不承诺三种协议都能继续同一个活跃回合。
 
-```mermaid
-sequenceDiagram
-  participant UI as ProjectChatPanel
-  participant C as agent_run_start
-  participant S as RunStore
-  participant H as Hermes Surface Adapter
-  participant G as Hermes Gateway
+#### 23.1.2.1 多引擎能力目录（2026-09-18）
 
-  UI->>C: 用户原文 + thread + model + attachment + skillRef
-  C->>C: 校验 Thread/Project 归属与模型白名单
-  C->>S: 创建/更新 Thread、Run、user message
-  C->>H: RunEnvelope（无 system/history/Skill 正文）
-  H->>G: session.create 或 session.resume
-  H->>G: config.set(model) + file/image.attach
-  opt 用户选择 Hermes Skill
-    H->>G: command.dispatch(name, arg)
-  end
-  H->>G: prompt.submit(text, surface=sophonote)
-  loop Hermes 原生事件
-    G-->>H: thinking/reasoning/status/tool/approval/clarify/message
-    H->>S: 映射 AgentEvent 并先持久化
-    S-->>UI: Channel 推送已提交事件
-  end
-  H->>S: completed / failed / cancelled
-  S-->>UI: 终态 + 可 replay/snapshot
-```
+能力配置通过 Rust `agent_capabilities(engine)` 读取独立快照：Hermes 委托现有正式 Gateway 管理接口；Pi/Claude/OpenCode 复用各自运行时校验，并从 Host 工具定义投影可见工具。快照显式区分运行时可用状态、已接入管理分类、工具与 Hermes 原生详情。目录只读、不落第二份配置，不启动 Agent Run，不扫描或加载个人全局技能、插件、hooks 或 MCP。
 
-关键规则（迁移后仍成立）：
+前端统一搜索与引擎/分类筛选只操作目录投影；每个引擎独立请求，超时可重试，旧请求不能覆盖刷新结果，一个引擎失败不阻塞其它目录。 Rust 目录与 Hub 查询设置 25 秒超时，前端提供 30 秒兜底；资源广场搜索防抖并丢弃过期响应，刷新快照可重新检索。全部视图按引擎与原生标识保留不同配置实例，来源与适用引擎分开展示。Hermes 原生管理页继续负责启停、编辑、安装与认证；未接入的其它引擎不显示可执行的管理按钮。内置 Host MCP 桥属于会话工具通道，不冒充可管理的用户 MCP Server。资源广场安装目标当前固定 Hermes，并明确标注；Browser 控制保留独立名称。
 
-1. 正式事件 **RunStore-first**：相邻同类 delta 可在 Adapter 内无损合并，但形成的正式事件必须由复用的 RunStore 连接持久化成功后才推 Channel；不得先显示后补库。
-2. 窗口重挂载从 RunStore 恢复；无终态不得猜测 completed。
-3. Agent/Skill/MCP 不能直接改 `.md`；只能 propose Patch，用户决定后 DocumentService 落盘。
-4. 重挂载恢复期间同一 Thread 不得启动下一轮；Channel 已绑定旧 WebView 时，由前端持续 replay/Snapshot 至终态，状态层门禁不可只靠按钮 disabled。
+本阶段不改变 §23.1 的运行隔离与 §23.1.6 的 Hermes Cron 所有权。跨引擎安装/配置写入、统一定时执行需后续适配和任务迁移门禁，不因界面筛选器存在就宣称已兼容。
 
-#### 23.1.3 Skill、MCP 与文档写入
+#### 23.1.3 Hermes 原生 Skill/MCP 与共享文档写入边界
+
+以下原生 Skill、MCP 管理和附件 RPC 为 Hermes 专项。Pi/Claude 通过 Rust 工具桥及显式文档工作副本接入同一审批/写入边界，不加载 Hermes Skill 或项目 actions，也不开放用户全局 MCP 配置。
 
 - Agent Skill 目录来自 Hermes `commands.catalog`；选择后调用 `command.dispatch`，SophoNote 不读取或注入 Skill 正文。
 - SophoNote 自有 Skill 源码位于 `skills/hermes/<category>/<name>/`，是版本化产品资源，不是每轮提示词。开发启动前 `scripts/sync-hermes-skills.sh` 将它原子安装到当前 Hermes Home；Runtime 启动/`skills.reload` 后成为唯一执行副本。旧固定端口/读取 Bearer Token 的 `sophonote` Bridge Skill 只在精确匹配旧内容时归档到 Hermes Home 的备份目录，不覆盖用户同名自定义 Skill。
@@ -1284,7 +1256,9 @@ sequenceDiagram
 
 **已完成（Hermes Surface）**：产品路径连接真实 `hermes serve` Gateway；Thread↔stored Session 1:1；创建/恢复、原生历史与 Memory、模型切换、图片/文件、Skill dispatch、取消、审批、澄清及完整过程事件已接入；SophoNote 不再传 system、历史副本、Skill 正文、Memory key、工作区 XML 或模型可见 Lease。Hermes 未配置时明确失败，不回退 Rig。
 
-**未完成**：Developer ID 公证/独立干净 VM 发布证据；WebSocket 中断后的 Run 续接/对账整场；H9 物理删除 Rig；Host 可验证的 SophoNote Session-bound capability channel；笔记本 document scope/可写 Patch；Hermes Desktop 独立续写后的消息增量导入；附件与审批的真实宿主整场验收。
+**未完成**：Developer ID 公证/独立干净 VM、Windows 实机；Hermes 独立 Desktop 续写导入与完整断线对账场景、通用 Session-bound 产品能力通道和 Rig 清债；Pi 云端 OpenViking、Claude 实际升级仍未验收。当前文档/选区工作副本 Diff 已接入三引擎，不再列为未实现；其更多真实写入场景仍按 NEXT-040/075 验收。
+
+**已完成（Pi / Claude）**：官方运行时适配、独立原生历史、同一 DeepSeek 配置与回复组件、Rust 审批/沙箱/文档 Diff、统一更新页。真实 Tauri 内 Pi/Claude 各两轮 DeepSeek 验证历史、中文列表/代码、reasoning/message 增量与单一终态通过；具体测试范围、preview.8 发布和未验收项见 NEXT-075。
 
 **相对 Hermes Desktop 的基础会话缺口（DEC-048，不复制完整 Desktop）**：
 
@@ -1308,16 +1282,18 @@ sequenceDiagram
 
 | 对象 | 当前已实现 | 尚未实现/不得宣称 |
 |---|---|---|
-| Hermes Gateway | loopback WebSocket + Session Token；`gateway.ready`；Release 从包内 Manifest 启动钉扎 Runtime，随机端口/Token、私有 Home、逐文件 hash、Host/watchdog 双回收；Debug 可显式 Attached | Developer ID 公证/干净 VM 证据与断线续接整场 |
-| Agent 执行引擎 | DEC-019：固定 Hermes；Release 只用 Bundled，Debug 显式 env 才 Attached；缺失/不健康失败；无设置项、无 Rig 产品分支 | 物理删除历史 Rig 测试依赖 |
-| Composer 模型路由 | Hermes `model.options(include_unconfigured=true)` 是唯一真相源；客户端仅展示 `authenticated != false` 且有模型的 Provider；选择成对透传 provider/model，新 Session 用 `session.create`，已存 Session 用 `config.set(model --provider … --session)`；Surface 偏好只保存 slug/model | Inline Completion 仍有独立 ModelGateway 配置，后续只做设置体验协调，不混用凭据 |
+| Hermes Gateway | loopback WebSocket + Session Token；`gateway.ready`；Release 从已验证私有槽或包内 Manifest 启动 Runtime，随机端口/Token、私有 Home、逐文件 hash、Host/watchdog 双回收；Debug 可显式 Attached | Developer ID 公证/干净 VM 证据与断线续接整场 |
+| Agent 执行引擎 | 按 Thread 固定 Hermes/Pi/Claude Code，旧记录默认 Hermes；切换新建会话；Runtime 不可用明确失败 | 跨引擎迁移原生历史、任何 Rig 回退 |
+
+| Composer 模型路由 | 共享 ai_config/Keychain 与偏好；Hermes 原生目录同步，Pi/Claude 协议过滤及 DeepSeek 显式适配，见 §23.1.2 | 任意 OpenAI 代理自动转换为 Claude 协议；逐供应商读 Keychain 才展示列表 |
+
 | Hermes Session / Memory | `session.create/resume`；Thread 保存 `stored_session_id`；Hermes 原生历史、压缩与 Memory 持续维护；SophoNote 消息仅作 UI/审计副本 | Hermes Desktop 独立续写后的增量导入；冲突、删除和分支同步 |
 | Skill / Tool / MCP / Browser | `commands.catalog` 发现与 `command.dispatch` 执行 Skill；`skills.manage` 浏览/搜索/安装并 `skills.reload`；Dashboard `/api/skills` 与 `/api/learning/node` 提供启停、使用量、编辑和可恢复归档；`tools.list/show/configure` 展示与切换 Toolset，`/api/analytics/usage` 聚合调用次数，Terminal backend 使用 Hermes 健康探测；MCP 新增/启停/移除/OAuth/探测及 Nous Catalog 安装复用 Hermes Dashboard `/api/mcp/*`，保存后调用 Gateway `reload.mcp(confirm=true)`；`browser.manage` 展示/连接/断开 Browser | Skill 升级/Hub 卸载、已有 MCP 原始配置全文编辑、运行日志与逐 MCP Tool include/exclude UI；这些管理动作不得回退到 SophoNote 旧本地清单 |
 | 附件 | 图片 `image.attach(_bytes)`；文件 `file.attach`；文件夹/URL 作为用户显式引用 | 文件夹独立 RPC、输出附件下载/预览完整回归 |
 | AgentEvent v4 | reasoning/status/tool/message/interim/approval/clarify/terminal；正文不经正则改写；RunStore-first + replay/snapshot | Gateway 重连后继续同一活跃 Run 的事件游标对账；更多 MoA/subagent 专属卡片 |
 | SophoNote 领域能力 | 旧 Bridge/Lease 代码仅作迁移资产，产品 Run 不挂载、不向模型泄露凭据 | Host 可验证的 Session-bound capability channel；完成前项目/文档工具 fail-closed |
 
-#### 23.1.5.1 三类会话的当前能力审计（2026-08-12）
+#### 23.1.5.1 Hermes 三类会话审计记录（2026-08-12；不代表 Pi/Claude 能力）
 
 “复用同一个 `ProjectChatPanel`”只代表共享 UI 和 RunStore 适配，不代表作用域、工具与双向同步已经等价。当前真实状态如下：
 
@@ -1339,15 +1315,15 @@ sequenceDiagram
 2. `agent_threads.external_session_id` 永久稳定；在会话、工作室、笔记本之间打开同一 Thread 不创建新 Session。
 3. SophoNote→Hermes：发送 Session、用户原文、模型、原生附件和 Skill 引用；不发送产品行为提示词。
 4. Hermes→SophoNote：本 Run 通过 Gateway events 回写；其它客户端产生的离线消息后续按 Hermes message ID 增量导入，转换为只读外部消息/事件，不伪造 SophoNote Run。
-5. 作用域不存进 Hermes Session 身份；每轮发送由 Rust 重新校验并冻结 `ScopeSnapshot`。同一个 Session 在不同产品视图打开时，权限只影响下一轮，不追溯改变历史 Run。
+5. 作用域不存进 Hermes Session 身份；每轮发送由 Rust 重新校验显式范围；持久 `ScopeSnapshot` 仍为后续契约。同一个 Session 在不同产品视图打开时，权限只影响下一轮，不追溯改变历史 Run。
 6. 笔记本必须新增 `scope_type=document, scope_id=<articleId>` 和精确 capability；只能读当前文档/选区，写入只产生 Patch 提案。不得用 `projectId=null` 同时表示“通用会话”和“当前笔记”两种权限。
 
-#### 23.1.6 Hermes 目标：四平面与 AgentEngine
+#### 23.1.6 Hermes 专项：四平面与 AgentEngine
 
 ```text
 执行平面  Hermes：loop / model / tool schedule / stream
 能力控制面 Hermes：Skill / Tool / MCP / Browser 状态与授权
-产品控制面 SophoNote：领域权限、文档审批、ScopeSnapshot、审计
+产品控制面 SophoNote：领域权限、文档审批、Run 内范围校验、审计（持久 ScopeSnapshot 待实现）
 数据平面  SophoNote：.md、SQLite、RunStore、operation 审计
 产品领域  SophoNote：笔记/发现/证据/选区 Patch/Inline Completion
 ```
@@ -1370,7 +1346,7 @@ AgentEngine
 
 **能力控制面（DEC-021 补充）**：能力面是 Hermes Desktop Capabilities 的 SophoNote Surface，而不是只读清单。Rust 适配层可同时读取 Gateway RPC（会话目录、Toolset、Tool、Browser）与同一 Hermes 实例的 loopback Dashboard API（Skill 启停/使用量、Terminal backend 探测、MCP Catalog、Hub 来源与预览），但前端只接收显示所需的结构化投影。MCP `headers`、Bearer Token 与环境变量值属于只写数据：仅在用户提交时发送给 Hermes，能力快照和安全配置预览只能返回“已配置”标识或变量名。Capabilities 的启停、安装、探测、认证、执行后端选择均写回 Hermes，再刷新同一真相源；SophoNote 不落第二份 Skill、Tool、MCP、Browser 配置。
 
-**发现订阅与计划任务（DEC-022）**：计划任务直接复用包内 Hermes 0.20 的 `cronjob`、`cron/jobs.json`、`cron/executions.db` 与 `/api/cron/*`，Hermes 是任务定义、下次执行、启停状态和运行历史的唯一真相源。Chat 与 SophoNote 的表单管理面都只调用 Hermes Cron 原生创建、更新、暂停/恢复、触发、运行历史和删除接口，固定 `deliver=local`；SophoNote 不复制任务到 `sophonote.db`，也不自建 tick/重试状态机。左侧主导航的“计划任务”与“知识库”平级，列表隐藏内部 ID 与 cron 原文，只投影中文执行规则、可选项目、有效状态和下一次执行；任务详情借鉴 Claude Code Desktop 的本地计划任务层级，优先提供每小时、每天、工作日、每周预设，把按间隔、单次和原生表达式作为进阶选项，并明确使用系统本地时区。模型选择写入 Hermes Cron 原生 `provider/model`，且任务定义、启停状态与运行历史只保存在应用私有 Hermes Home，迁移或升级时原位保留。MindBox → SophoNote 品牌迁移在 Runtime 启动前按相同 Hermes 版本检查：只有新 Home 缺少 `cron/jobs.json` 且旧 Home 存在任务时，才补拷任务定义、空库情况下的执行数据库、缺失的 notepad/审计文件和输出目录；旧目录保留，已有新任务或非空新执行库绝不覆盖。开源任务范例位于版本化 `examples/scheduled-tasks.json`，只保留名称、说明、自然语言 prompt、计划表达式和 SophoNote Skill 引用；不得从私有 Hermes Home 复制任务 ID、历史、模型、时间戳或输出。React 只把用户选中的范例转成 Cron draft，Host 通过 `startPaused` 在创建后立刻暂停；范例不会首启播种或自动重复创建。`provider/model` 必须成对出现并属于“设置配置 ∩ 凭据有效 ∩ Runtime 可执行”；新建/更新未选择模型时允许保存任务，但 Host 必须立即暂停。历史任务缺失模型、使用 `moa/default` 占位或所选模型已失效时，列表对账只原位暂停，不猜测、不补写全局默认模型；恢复和立即触发前再次校验显式模型。暂停任务配置有效模型后允许经原生 `/trigger` 单次执行，只有显式恢复才参与周期调度。可选项目归属复用原生 `workdir` 映射到 SophoNote 私有项目工作目录，不新增平行关系表。本期不模拟 Hermes 未提供的工作树、权限审批、跳过原因或云端执行，也不配置微信、飞书或其他外部 delivery。
+**发现订阅与计划任务（DEC-022）**：计划任务直接复用包内 Hermes 0.20 的 `cronjob`、`cron/jobs.json`、`cron/executions.db` 与 `/api/cron/*`，Hermes 是任务定义、下次执行、启停状态和运行历史的唯一真相源。Chat 与 SophoNote 的表单管理面都只调用 Hermes Cron 原生创建、更新、暂停/恢复、触发、运行历史和删除接口，固定 `deliver=local`；SophoNote 不复制任务到 `sophonote.db`，也不自建 tick/重试状态机。左侧主导航提供“计划任务”；旧“知识库”页面已下线，列表隐藏内部 ID 与 cron 原文，只投影中文执行规则、可选项目、有效状态和下一次执行；任务详情借鉴 Claude Code Desktop 的本地计划任务层级，优先提供每小时、每天、工作日、每周预设，把按间隔、单次和原生表达式作为进阶选项，并明确使用系统本地时区。模型选择写入 Hermes Cron 原生 `provider/model`，且任务定义、启停状态与运行历史只保存在应用私有 Hermes Home，迁移或升级时原位保留。MindBox → SophoNote 品牌迁移在 Runtime 启动前按相同 Hermes 版本检查：只有新 Home 缺少 `cron/jobs.json` 且旧 Home 存在任务时，才补拷任务定义、空库情况下的执行数据库、缺失的 notepad/审计文件和输出目录；旧目录保留，已有新任务或非空新执行库绝不覆盖。开源任务范例位于版本化 `examples/scheduled-tasks.json`，只保留名称、说明、自然语言 prompt、计划表达式和 SophoNote Skill 引用；不得从私有 Hermes Home 复制任务 ID、历史、模型、时间戳或输出。React 只把用户选中的范例转成 Cron draft，Host 通过 `startPaused` 在创建后立刻暂停；范例不会首启播种或自动重复创建。`provider/model` 必须成对出现并属于“设置配置 ∩ 凭据有效 ∩ Runtime 可执行”；新建/更新未选择模型时允许保存任务，但 Host 必须立即暂停。历史任务缺失模型、使用 `moa/default` 占位或所选模型已失效时，列表对账只原位暂停，不猜测、不补写全局默认模型；恢复和立即触发前再次校验显式模型。暂停任务配置有效模型后允许经原生 `/trigger` 单次执行，只有显式恢复才参与周期调度。可选项目归属复用原生 `workdir` 映射到 SophoNote 私有项目工作目录，不新增平行关系表。本期不模拟 Hermes 未提供的工作树、权限审批、跳过原因或云端执行，也不配置微信、飞书或其他外部 delivery。
 
 **设置页调度收口（DEC-029）**：移除旧 `daily_report_time` 本地提醒轮询及 `sophonote:daily-report-due` WebView 事件，也不再读取或写入 `daily_report_time`、`nightly_insight_time`。这两个遗留 SQLite setting 可保留为无效兼容数据，但不得控制产品行为。日报/解读的时间与状态只能来自 Hermes Cron。正文抓取仍由每源抓取后的新条目预热、失败重试以及启动后的按源配额补抓完成；`content_coverage_stats` 与 `backfill_item_contents` 可保留为 Host 诊断接口，但普通设置页不展示覆盖率或手动补抓入口。
 
@@ -1388,7 +1364,7 @@ AgentEngine
 
 **工作区端状态（能力协议）**：项目清单、当前文档与 SelectionSnapshot 不拼进 system prompt。选区/当前文档仅在界面存在可见范围 chip 时作为原生 Session 工作副本进入当轮；选区优先，且副本不得被持久化成第二份文档真相源。正文、标题与项目树分别使用独立边界：Host 在回合终态校验 Run/Session 本地绑定、发送时快照、baseVersion、当前 projectId 和动作白名单；正文只生成 Patch 提案并由用户逐 hunk 决定，标题只生成改名提案，项目树 actions 只能创建当前项目文档或设置同项目父级。任何工作副本都不提供读取项目其它文档的能力。旧 `leaseId` 模型参数路径不得复活；Agent 也不得为读取已附加正文而调用该旧 MCP。
 
-**DEC-012（模型配置）**：Hermes Agent 的 Provider/模型目录及会话模型状态由 Hermes Runtime 持有，Provider 凭据以 SophoNote 的 macOS Keychain 为唯一持久化真相源；Host 启动 Sidecar 时只把已配置凭据短期注入该子进程环境，不写 Hermes 配置、SQLite、WebView、日志或命令行，也不注入可让空模型 Cron 静默执行的 `HERMES_MODEL`。会话选择器直接读取 `model.options(include_unconfigured=true)` 并按 Runtime 的 `authenticated` 状态过滤，Provider/模型成对传递；新 Session 在 `session.create` 指定，恢复 Session 经 `config.set(... --provider ... --session)` 切换。计划任务必须显式保存 provider/model，否则保持暂停。SophoNote 产品路径不创建 Agent 用的本地 ModelGateway；AIConfig 只继续服务 Inline Completion 等非 Agent 轻量路径。
+**DEC-012（共享模型配置）**：`ai_config` 与 Keychain 是 Hermes/Pi/Claude Code/OpenCode 四引擎和非 Agent 模型能力的共同配置真相源。Hermes 原生模型目录与 Session 模型状态是运行投影，不能成为第二套配置；Pi/Claude/OpenCode 根据协议投影同一模型白名单，详见 §23.1.2。Cron 仍属于 Hermes，任务必须显式保存 provider/model，缺失则暂停；不得注入让空模型任务静默执行的 `HERMES_MODEL`。
 
 启动凭据投影不能假设 SQLite 已存在 `ai_config`：若用户尚未修改过默认配置，Host 使用与 ModelGateway 相同的内置 DeepSeek snapshot，并把 Keychain（或仅 Debug 开发回退）中的 `deepseek` 凭据短期注入 Sidecar。设置页的 Key 保存命令先完成凭据落地和进程缓存，再重启包内 Runtime；第二阶段失败只返回 Runtime 警告，不能让前端丢失“已配置”标记。
 
@@ -1444,25 +1420,24 @@ sequenceDiagram
 | failed / cancelled | `run_failed` / `run_cancelled` |
 | 不可恢复中断 | `engine_degraded` + `interrupted` |
 
-#### 23.1.8 现有 `agent/*` 与目标文件映射
+#### 23.1.8 当前三引擎文件映射
 
-| 现有文件 | 迁移后角色 |
+| 文件/模块 | 当前职责 |
 |---|---|
-| `agent/mod.rs` | 导出 `engine`、`hermes`；保留 commands/store/events |
-| `agent/commands.rs` | 对外 `agent_run_start/cancel/…` 协议保留；内部改调 `AgentEngine` |
-| `agent/store.rs` | **保留并增强**（engine 元数据列、v2 事件） |
-| `agent/events.rs` / `types.rs` | 升 v2 schema；DTO 仍 SophoNote 自有 |
-| `agent/run_controller.rs` | 历史 Rig Spike/测试资产；不注册产品 IPC，完成夹具迁移后删除 |
-| `agent/adapters.rs` | Rig 专用；生产切 Hermes 后删除或仅测回退 |
-| **新增** `agent/engine.rs` | `AgentEngine` trait + 错误类型 |
-| **新增** `agent/hermes/{mod,client,supervisor,config,event_mapper,recovery}.rs` | spawn/health/HTTP-SSE/映射/对账 |
-| **新增** `sophonote_mcp/{server,lease,policy,tools,external_mcp_proxy}.rs` | Bridge + Lease |
-| **新增** `skills/hermes_export.rs` | 只读导出派生 SKILL 缓存 |
-| `model/*` | **保留**：Inline Completion 与非 Agent AI |
-| `tools/*` | 领域工具实现迁入 Bridge 背后；管理命令仍不对模型开放 |
-| `documents/*` | **核心不变量不改** |
+| `agent/commands.rs` | Tauri Run 入口与引擎分派；恢复时区分 Hermes 和 Pi/Claude |
+| `agent/engine.rs` | Hermes 与历史测试使用的 AgentEngine 抽象；不要求 Pi/Claude 实现同一 trait |
+| `agent/hermes/attached_engine.rs` | Hermes Gateway Session/Run 生命周期与事件适配 |
+| `agent/pi/mod.rs` | Pi/Claude 共用的配置快照、Scope、Run claim、审批/文档工作副本准备 |
+| `agent/pi/transport.rs`、`agent/pi/tools.rs` | Pi JSONL RPC 与 Host 文件/命令工具 |
+| `agent/claude/mod.rs`、`agent/claude/transport.rs` | 模型协议兼容、官方 CLI stream-json、逐 Run MCP 工具桥 |
+| `agent/runtime_updates.rs` | Pi/Claude 更新入口、官方安装来源识别和在途 Run 门禁 |
+| `agent/store.rs`、`agent/events.rs`、`agent/types.rs` | 统一业务 DTO、AgentEvent v4、RunStore 持久化与重放 |
+| `agent/run_controller.rs`、`agent/adapters.rs` | 历史 Rig 测试/迁移资产，不注册产品回退 |
+| `model/*`、`documents/*` | 非 Agent 模型出口；文档唯一安全落盘入口 |
 
-#### 23.1.9 Hermes 迭代计划（与台账 NEXT-018～025 对齐）
+底层协议类型不进入业务 DTO/SQLite/前端 store。更新版本不改变 Thread 引擎或搬运原生历史。
+
+#### 23.1.9 Hermes 历史迁移计划（NEXT-018～025；当前引擎范围见 DEC-053）
 
 | 步骤 | 工作包 | 验收门槛 | 依赖 |
 |---|---|---|---|
@@ -1474,9 +1449,9 @@ sequenceDiagram
 | H5 | MCP Bridge + Lease + Skill 导出 | **已完成（协议/内存）**：越权/过期 Lease 拒绝；Skill 只读缓存；modelRoute 来自 SophoNote settings（DEC-012） | H4、NEXT-011 协同 |
 | H6 | `propose_document_patch` 经 Bridge | **已完成（协议）**：`invoke_with_tools` + Lease；dry-run 不改 notes；审批/DocumentService 不变；`hermes_patch_bridge_h6` | H5 |
 | H7 | 黄金任务双跑 Rig vs Hermes | **已完成（自动）**：终态类别一致、写工具不旁路、Lease 边界；`hermes_dual_run_h7`（非宿主录像） | H6 |
-| H8 | Hermes 设为默认 | **已完成并被 DEC-019 收口**：历史阶段曾提供切换，现产品固定 Hermes | H7 |
+| H8 | Hermes 设为默认 | **历史已完成**：DEC-019 曾固定 Hermes；现由 DEC-053 扩展为按会话固定三引擎 | H7 |
 | H9A | 移除 Rig 产品回退 | **已完成**：移除 `agent.engine` UI/读取、生产 Run Rig 分支和注册的 Rig Spike 命令；Hermes 不可用明确失败 | H8 |
-| H9B | 物理删除 Rig 依赖与历史夹具 | **待清债**：不影响 Hermes-only 产品语义；完成全量 Rust 夹具迁移后删除 `rig-*`、Adapter 与旧循环 | H9A + 回归夹具迁移 |
+| H9B | 物理删除 Rig 依赖与历史夹具 | **待清债**：不影响三引擎均不回退 Rig 的产品语义；完成全量 Rust 夹具迁移后删除 `rig-*`、Adapter 与旧循环 | H9A + 回归夹具迁移 |
 
 **优先级纪律**：P0 书写宿主验收优先于 H3+；H 系列不得拖垮输入/切换性能。并发首版 `max_concurrent_runs: 1`。
 
@@ -1785,7 +1760,7 @@ DEC-036 将两类入口按任务分工：一级会话使用 Codex/Claude Code/Cu
 
 DEC-037 进一步把 IDECanvas 固化为 VS Code Workbench 区域模型：项目/会话轨默认折叠；`LocalWorkspacePanel` 内部由 Activity Bar、Explorer/Search/Source Control 主侧栏、带 Breadcrumb 的多标签 Editor、编辑器下方 Problems/Output/Terminal Panel 与 Status Bar 构成；`ProjectChatPanel` 是右侧 Secondary Side Bar。文件打开、切换、关闭、脏状态、直接编辑、`Cmd/Ctrl+S` 保存、`Cmd/Ctrl+P` 文件筛选与 `Ctrl+\`` 终端切换属于 Host UI 行为，真实读写/命令仍必须经过 WorkspaceService 和权限模式。Browser 从省略号打开为 Editor 标签；会话、工作室和笔记本共用 `NativeBrowserSurface`，按可见标签懒创建、关闭标签即回收 Tauri 原生子 WebView。DEC-047 页签保活隐藏时不销毁仍打开的 Browser，而是把子 WebView 停泊到屏外 1×1，避免 `hidden` 后宿主矩形为 0 却仍覆盖当前页。支持普通网页、localhost、远程 PDF URL 和用户通过系统选择器明确授权的单个本地 PDF。不得使用会被站点 `X-Frame-Options`/CSP 普遍阻断的 HTML iframe 充当浏览器，也不得为浏览本地 PDF 放宽整个目录或任意文件协议访问。Host 内部 PreviewSession 仍可服务 Agent 验证，但不恢复独立 Preview 顶级标签。
 
-DEC-038 将 `ProjectChatPanel` 的 Composer 固化为会话、工作室和笔记本共用的唯一任务控制面。底部 `leftSlot` 依次渲染添加按钮和 `ComposerPermissionControl`；权限值由拥有会话的 Surface 受控传入，未提供回调的笔记本使用面板内会话状态，任何情况下都不得把权限重新放入工作区 Header、IDE 工具栏或范围芯片。`AttachmentPickerPopup` 同时承载附件与 Skill：主层包含文件、文件夹、图片、粘贴图片、URL 和 Skill 入口，Skill 子层在同一浮层内选择 Hermes Skill 或普通对话；独立 Sparkles Skill 按钮和第二套 Skill Popup 已删除。工作范围芯片只表达路径/文档范围与移除动作，不混入权限选择。
+DEC-038 将 `ProjectChatPanel` 的 Composer 固化为会话、工作室和笔记本共用的唯一任务控制面。底部 `leftSlot` 依次渲染添加按钮、`AgentEngineControl` 和 `ComposerPermissionControl`；权限值由拥有会话的 Surface 受控传入，未提供回调的笔记本使用面板内会话状态，任何情况下都不得把权限重新放入工作区 Header、IDE 工具栏或范围芯片。`AttachmentPickerPopup` 同时承载附件与 Skill：主层包含文件、文件夹、图片、粘贴图片、URL 和 Skill 入口，Skill 子层在同一浮层内选择 Hermes Skill 或普通对话；独立 Sparkles Skill 按钮和第二套 Skill Popup 已删除。工作范围芯片只表达路径/文档范围与移除动作，不混入权限选择。
 
 现有项目 Chat 迁移为共享会话内核的 project filter。把快捷会话归属项目时，必须校验无非终态 Run、目标项目存在和用户确认；更新 `project_id/scope` 后继续复用 `external_session_id`。项目长期记忆只接收用户允许的摘要/成果引用，不把完整 RunStore 消息镜像成第二套记忆。
 
@@ -2231,7 +2206,7 @@ Adapter 不得保存 Claim/Decision 唯一真相、直写 Hermes Memory、越过
 
 ### 23.9 Browser、代码工作区与应用 Preview
 
-本节落实 DEC-031。目标不是内置一个完整 IDE，而是让同一 Thread 在会话、工作室与笔记本获得可见 Browser，并让会话/工作室完成与 Claude Code Desktop 同类的最小代码闭环：
+本节为 DEC-031 的目标闭环，包含尚未实现的服务：当前只有 Hermes 可见 Browser、目录绑定/权限、工作室本地文件/编辑/Git 变更/Terminal 基础；CodeChangeService、PreviewSupervisor 与接管整场按 NEXT-057/058/059 推进。目标不是内置一个完整 IDE，而是让同一 Thread 在会话、工作室与笔记本获得可见 Browser，并让会话/工作室完成与 Claude Code Desktop 同类的最小代码闭环：
 
 ```text
 选择作用域 → Agent 浏览/读代码 → 提议改动 → 用户审 Diff
@@ -2423,7 +2398,7 @@ preview_sessions {
 
 ### 23.9.9 Computer Use 适配
 
-Hermes `computer_use` 保持唯一 Agent 工具执行面。macOS 使用随包固定版本 cua-driver 的 embedded 模式：SophoNote Rust 主进程直接启动私有 daemon，保留 macOS TCC responsibility chain；由主 App 请求辅助功能和屏幕录制，权限归属必须为 `com.fei.sophonote`。禁止通过 LaunchServices 启动独立 CuaDriver.app，禁止由 Hermes Gateway 代为创建 daemon，禁止用改名或环境标签冒充已验证身份。非 macOS 暂保留原 Hermes 安装路径。
+电脑控制当前只接入 Hermes `computer_use`；Pi/Claude 不展示此能力。macOS 使用随包固定版本 cua-driver 的 embedded 模式：SophoNote Rust 主进程直接启动私有 daemon，保留 macOS TCC responsibility chain；由主 App 请求辅助功能和屏幕录制，权限归属必须为 `com.fei.sophonote`。禁止通过 LaunchServices 启动独立 CuaDriver.app，禁止由 Hermes Gateway 代为创建 daemon，禁止用改名或环境标签冒充已验证身份。非 macOS 暂保留原 Hermes 安装路径。
 
 控制组件随 macOS App 资源打包，构建脚本固定上游版本与下载 SHA-256，嵌套可执行文件先签名、主 App 后签名/公证。Hermes 仅获得受限代理入口和本轮 App 专用 socket；入口只允许版本/manifest 探测及连接已有 daemon 的 MCP，拒绝独立 serve、安装、升级与授权命令，不能回退到机器全局驱动。组件更新随 App 版本，不受 Hermes 私有更新槽替换。
 
@@ -2460,7 +2435,7 @@ flowchart LR
     HOST -->|typed, non-secret DTO| UI
 ```
 
-Hermes Dashboard analytics 是 Session、API call、输入/输出/cache-read/reasoning Token 和费用估算的唯一真相源。Rust 将 snake_case Runtime 响应转换为稳定 camelCase DTO，并对缺失/`null` 数值归零；`days` 只允许 7、30、90。Runtime 当前只返回全部模型的 daily 与各模型窗口汇总，因此前端在“全部模型”下按自然日补齐窗口并以柱状图展示每日总 Token，选择单模型时只重算摘要/明细并隐藏趋势，不从总量比例推算逐日模型 Token。
+当前用量页只统计 Hermes：Hermes Dashboard analytics 是其 Session、API call、输入/输出/cache-read/reasoning Token 和费用估算的真相源。Pi/Claude 的事件与模型配置已统一，但尚未纳入该用量聚合；不能用消息数推算或把 Hermes 账本标成全部引擎总量。Rust 将 snake_case Runtime 响应转换为稳定 camelCase DTO，并对缺失/`null` 数值归零；`days` 只允许 7、30、90。Runtime 当前只返回全部模型的 daily 与各模型窗口汇总，因此前端在“全部模型”下按自然日补齐窗口并以柱状图展示每日总 Token，选择单模型时只重算摘要/明细并隐藏趋势，不从总量比例推算逐日模型 Token。
 
 Runtime `estimatedCost` / `actualCost` 是用量费用真相；摘要、逐日提示和模型明细复用同一格式化函数，普通界面只显示 `¥` 数值与“预估费用”，不展开价格来源、汇率或结算免责声明。当前 Hermes analytics DTO 仍以美元字段承载估算值，SophoNote 展示层保留兼容换算；价格目录落地后，DTO 改为携带调用时已固化的展示金额、币种和价格版本，React 不再自行换算。
 
@@ -2523,5 +2498,5 @@ AppliedPricingSnapshot → UsageLedger → Analytics DTO
 - 旧方案、审计和图表不写回本仓库：历史草稿不在树内，不要重建 `docs/history/`。
 - 现行文档平铺在 `docs/`，不要重建 `docs/current/` 或 `docs/guides/`。
 - 社区入口文档成对维护：英文无后缀（`README.md`），中文为 `.zh-CN.md`。本文与 PRD、台账正文以中文为真相源，不另写英文全译本。
-- 当前架构图优先维护为本文 Mermaid；需要交付独立图时同时保存可编辑源与渲染产物。
+- 当前架构图统一维护 `sophonote-current-architecture.archify.json` 与校验后的 HTML；本文 Mermaid 保持同一边界的简图，不再维护独立 Hermes 目标图。
 - 代码注释只引用 `docs/` 下的长期文档或直接描述不变量，不以历史文件和开发轮次作为实施基线。

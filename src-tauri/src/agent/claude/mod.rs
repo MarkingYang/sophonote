@@ -1,6 +1,6 @@
 //! Claude Code's official CLI, driven by Rust with a Run-scoped tool surface.
 pub(crate) mod runtime;
-mod tools_server;
+pub(crate) mod tools_server;
 pub(crate) mod transport;
 
 use super::commands::HermesModelOptions;

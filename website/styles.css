@@ -1488,3 +1488,46 @@ img {
   .reveal { opacity: 1; transform: none; }
   body::after { display: none; }
 }
+
+/* Current project and memory workflows share the existing brand palette. */
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+.capability > *, .hero-grid > *, .download-grid > * { min-width: 0; }
+.engine-options { flex-wrap: wrap; gap: 8px; }
+.engine-options span { white-space: nowrap; }
+.project-demo, .memory-demo { min-width: 0; padding: 28px; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-soft); }
+.project-folder { margin: 20px 0; color: var(--muted); font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+.project-task { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 18px 10px; border-top: 1px solid var(--line); font-size: 12px; }
+.project-task b { font-size: 14px; font-weight: 600; }
+.project-task small { display: block; margin-top: 3px; color: var(--muted); }
+.project-task > span:last-child { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.project-task.current { background: var(--gold-wash); border-radius: 8px; }
+.task-number { color: var(--gold-deep); font: 12px var(--mono); }
+.demo-caption { margin: 20px 0 0; color: var(--muted); font-size: 10px; }
+.memory-layout { display: grid; grid-template-columns: 125px minmax(0, 1fr); margin-top: 24px; min-height: 260px; }
+.memory-sources { display: flex; flex-direction: column; gap: 5px; border-right: 1px solid var(--line); padding-right: 14px; }
+.memory-sources small { margin: 0 10px 8px; color: var(--muted); font-size: 10px; }
+.memory-sources > span { padding: 8px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap; }
+.memory-sources .selected { color: var(--navy); background: var(--gold-wash); font-weight: 600; }
+.memory-sources b { float: right; }
+.memory-document { padding: 8px 0 0 22px; min-width: 0; }
+.memory-document small { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.memory-document h4 { margin: 25px 0 12px; font-size: 18px; }
+.memory-document p { font-size: 12px; line-height: 2; }
+.memory-edit { margin-top: 32px; color: var(--gold-deep); font-size: 11px; }
+.install-details { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+.install-details p { font-size: 13px; margin: 10px 0; }
+.install-details b { color: var(--navy); margin-right: 8px; }
+.review-bar .demo-action { padding: 5px 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; font-size: 10px; }
+.review-bar .accept { color: var(--navy); background: var(--gold-wash); }
+.button:active { transform: translateY(1px); }
+@media (max-width: 680px) {
+  .project-demo, .memory-demo { padding: 18px; }
+  .memory-layout { grid-template-columns: 110px minmax(0, 1fr); }
+  .memory-document { padding-left: 14px; }
+  .memory-sources { padding-right: 10px; }
+  .memory-sources > span { padding-inline: 7px; font-size: 11px; }
+  .project-task { grid-template-columns: 20px minmax(0, 1fr); padding-inline: 4px; }
+  .project-task > span:last-child { grid-column: 2; }
+  .engine-options span { flex: 1 1 40%; text-align: center; }
+}

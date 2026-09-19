@@ -25,7 +25,6 @@ const Conversation = lazy(pageLoaders.conversation);
 const ScheduledTasks = lazy(pageLoaders['scheduled-tasks']);
 const Articles = lazy(pageLoaders.articles);
 const Notes = lazy(pageLoaders.notes);
-const AIStudio = lazy(pageLoaders['ai-studio']);
 const Tasks = lazy(pageLoaders.tasks);
 const Settings = lazy(pageLoaders.settings);
 const ItemDetail = lazy(itemDetailLoader);
@@ -36,7 +35,7 @@ const pages: Record<string, React.ComponentType> = {
   'scheduled-tasks': ScheduledTasks,
   articles: Articles,
   notes: Notes,
-  'ai-studio': AIStudio,
+  'ai-studio': Conversation,
   tasks: Tasks,
   settings: Settings,
 };
@@ -59,7 +58,11 @@ function PageFallback() {
 const HOST_GATE_WATCH_GEN = 12;
 
 function App() {
-  const activePage = useAppStore((state) => state.activePage);
+  const storedPage = useAppStore((state) => state.activePage);
+  const activePage = storedPage === 'ai-studio' ? 'conversation' : storedPage;
+  useEffect(() => {
+    if (storedPage === 'ai-studio') useAppStore.getState().setActivePage('conversation');
+  }, [storedPage]);
   const initialize = useAppStore((state) => state.initialize);
   const initialized = useAppStore((state) => state.initialized);
   const theme = useAppStore((state) => state.settings.theme);

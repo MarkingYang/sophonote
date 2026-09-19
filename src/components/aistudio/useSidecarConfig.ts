@@ -16,7 +16,7 @@ export function useSidecarConfig(engine: AgentEngine, modelConfig: unknown) {
     if (engine === 'hermes') return;
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    const label = engine === 'pi' ? 'Pi' : 'Claude Code';
+    const label = engine === 'opencode' ? 'OpenCode' : engine === 'pi' ? 'Pi' : 'Claude Code';
     setModels(null); setStatus(null); setRuntimeError(null); setModelError(null);
     setSelection({ provider: '', model: '' });
     setModelsLoading(true); setRuntimeLoading(true);
@@ -37,11 +37,11 @@ export function useSidecarConfig(engine: AgentEngine, modelConfig: unknown) {
         if (!cancelled && !settled) { settled = true; done(); }
       });
     }
-    load(engine === 'pi' ? tauri.piRuntimeStatus() : tauri.claudeRuntimeStatus(), (value) => {
+    load(engine === 'opencode' ? tauri.opencodeRuntimeStatus() : engine === 'pi' ? tauri.piRuntimeStatus() : tauri.claudeRuntimeStatus(), (value) => {
       setStatus(value);
       if (!value.available) setRuntimeError(value.error ?? `${label} 未就绪`);
     }, setRuntimeError, () => setRuntimeLoading(false), '运行时状态');
-    load(engine === 'pi' ? tauri.piModelOptions() : tauri.claudeModelOptions(), (options) => {
+    load(engine === 'opencode' ? tauri.opencodeModelOptions() : engine === 'pi' ? tauri.piModelOptions() : tauri.claudeModelOptions(), (options) => {
       setModels(options);
       setSelection(resolveStoredHermesSelection(options, true));
     }, setModelError, () => setModelsLoading(false), '模型配置');

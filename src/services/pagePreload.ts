@@ -5,7 +5,7 @@ export const pageLoaders = {
   'scheduled-tasks': () => import('../pages/ScheduledTasks'),
   articles: () => import('../pages/Articles'),
   notes: () => import('../pages/Notes'),
-  'ai-studio': () => import('../pages/AIStudio'),
+  'ai-studio': () => import('../pages/Conversation'),
   tasks: () => import('../pages/Tasks'),
   settings: () => import('../pages/Settings'),
 } as const;

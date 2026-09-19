@@ -37,7 +37,10 @@ fn production_probe_false_without_attached_or_pinned_bin() {
 #[test]
 fn production_probe_true_when_gateway_env_set() {
     let _guard = HERMES_ENV_LOCK.lock().unwrap();
-    std::env::set_var("SOPHONOTE_HERMES_GATEWAY_URL", "ws://127.0.0.1:19119/api/ws");
+    std::env::set_var(
+        "SOPHONOTE_HERMES_GATEWAY_URL",
+        "ws://127.0.0.1:19119/api/ws",
+    );
     std::env::set_var(
         "SOPHONOTE_HERMES_GATEWAY_TOKEN",
         "test-token-not-real-but-long-enough",

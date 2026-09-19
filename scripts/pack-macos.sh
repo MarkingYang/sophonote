@@ -47,6 +47,7 @@ then
 fi
 
 pnpm pi:bundle
+pnpm opencode:bundle
 pnpm tauri build --bundles app
 
 APP="$ROOT/src-tauri/target/release/bundle.noindex/macos/SophoNote.app"

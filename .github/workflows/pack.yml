@@ -55,6 +55,8 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Preserve pinned source bytes on Windows
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
         with:
@@ -97,6 +99,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: sophonote-macos-aarch64-unsigned
@@ -111,6 +114,8 @@ jobs:
             exit 1
           fi
 
+          git tag -l "$GITHUB_REF_NAME" --format='%(contents)' > "$RUNNER_TEMP/release-notes.md"
+
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --prerelease --repo "$GITHUB_REPOSITORY"
             gh release upload "$GITHUB_REF_NAME" "${release_files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
@@ -120,7 +125,7 @@ jobs:
               --verify-tag \
               --prerelease \
               --title "SophoNote $GITHUB_REF_NAME Community Preview" \
-              --notes "Unsigned community preview for testing. macOS is not notarized and Windows is not Authenticode-signed; review the repository documentation before installing."
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
 
   publish-windows-preview:

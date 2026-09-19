@@ -14,7 +14,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-pub(super) struct Server {
+pub(crate) struct Server {
     pub url: String,
     pub bearer: String,
     stop: CancellationToken,
@@ -34,7 +34,7 @@ struct State {
     bearer: String,
 }
 
-pub(super) fn definitions() -> Value {
+pub(crate) fn definitions() -> Value {
     let mut tools = vec![
         json!({"name":"read","description":"Read a UTF-8 file in the authorized workspace or attachments (max 1 MiB).","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"ls","description":"List an authorized directory.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}),
@@ -47,7 +47,7 @@ pub(super) fn definitions() -> Value {
     json!(tools)
 }
 
-pub(super) async fn start(
+pub(crate) async fn start(
     scope: tools::Scope,
     events: Arc<EventEmitter>,
     run: &str,
@@ -55,7 +55,7 @@ pub(super) async fn start(
 ) -> Result<Server, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .map_err(|_| "无法启动 Claude Code 工具服务")?;
+        .map_err(|_| "无法启动智能体工具服务")?;
     let url = format!(
         "http://{}/mcp",
         listener.local_addr().map_err(|e| e.to_string())?

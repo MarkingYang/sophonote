@@ -22,10 +22,9 @@
 | 文档 | 职责 |
 |---|---|
 | [贡献指南](../CONTRIBUTING.zh-CN.md) | 环境、PR、Hermes sidecar、附着、打包、开源卫生 |
-| [许可证](../LICENSE) / [第三方声明](../NOTICE) | MIT；Hermes 与 CPython 再分发义务 |
+| [许可证](../LICENSE) / [第三方声明](../NOTICE) | MIT；Hermes、Pi 与 CPython 再分发义务 |
 | [安全披露](../SECURITY.zh-CN.md) | 漏洞报告；不要在公开 Issue 贴密钥或笔记 |
-| [Hermes 执行平面图](./hermes-runtime-architecture.html) | DEC-011 交互式架构图（源：同名 `.archify.json`） |
-| [当前实装架构图](./sophonote-current-architecture.html) | 产品壳 + Hermes 执行平面（源：同名 `.archify.json`） |
+| [当前实装架构图](./sophonote-current-architecture.html) | 统一产品界面 + Hermes / Pi / Claude Code（源：同名 `.archify.json`） |
 
 ## 产品与架构真相源
 

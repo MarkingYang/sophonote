@@ -5,15 +5,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sophonote_lib::sophonote_mcp::{
-    bridge_patch_registry, issue_lease, BridgeInvokeRequest, LeaseError, LeaseRegistry,
-    SophonoteBridge, ModelRoute, BRIDGE_PATCH_TOOL,
+    bridge_patch_registry, issue_lease, BridgeInvokeRequest, LeaseError, LeaseRegistry, ModelRoute,
+    SophonoteBridge, BRIDGE_PATCH_TOOL,
 };
 use sophonote_lib::tools::documents::ProposeDocumentPatchTool;
 use sophonote_lib::tools::ToolRegistry;
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("sophonote-hermes-h6-{tag}-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!(
+        "sophonote-hermes-h6-{tag}-{}",
+        uuid::Uuid::new_v4()
+    ));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

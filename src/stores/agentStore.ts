@@ -56,7 +56,7 @@ export type RunStatus =
   | 'interrupted';
 
 /** Thread（话题容器） */
-export type AgentEngine = 'hermes' | 'pi' | 'claude_code';
+export type AgentEngine = 'hermes' | 'pi' | 'claude_code' | 'opencode';
 
 export interface AgentThread {
   engine?: AgentEngine;
@@ -138,7 +138,7 @@ export function resolveProjectThreadId(
 
 export function isPlaceholderThreadTitle(title: string | null | undefined): boolean {
   const t = (title ?? '').trim();
-  return t.length === 0 || t === '新会话' || t === '新对话' || t === '未命名会话';
+  return t.length === 0 || t === '新会话' || t === '新对话' || t === '未命名会话' || t === '新任务' || t === '未命名任务';
 }
 
 /** 由首条用户 Query 与可选有效助手回复生成会话标题（与 Rust derive 对齐） */
@@ -1834,7 +1834,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       );
       return result.success && result.data;
     } catch (error) {
-      console.error('Failed to respond to Hermes approval:', error);
+      console.error('Failed to respond to agent approval:', error);
       return false;
     }
   },
@@ -1847,7 +1847,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       );
       return result.success && result.data;
     } catch (error) {
-      console.error('Failed to respond to Hermes clarify request:', error);
+      console.error('Failed to respond to agent clarify request:', error);
       return false;
     }
   },

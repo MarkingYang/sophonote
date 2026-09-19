@@ -80,10 +80,15 @@ fn hermes_session_for_thread(
 ) -> Result<Option<String>, String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
     let store = crate::agent::store::RunStore::new(conn);
-    if store.get_thread(thread_id).map_err(|e| e.to_string())?.is_some_and(|t| t.engine != "hermes") {
+    if store
+        .get_thread(thread_id)
+        .map_err(|e| e.to_string())?
+        .is_some_and(|t| t.engine != "hermes")
+    {
         return Err("此会话使用其他引擎，不能调用 Hermes Session".into());
     }
-    store.external_session_id_for_thread(thread_id)
+    store
+        .external_session_id_for_thread(thread_id)
         .map_err(|e| format!("读取 Hermes Session 映射失败: {e}"))
 }
 
@@ -389,18 +394,7 @@ pub async fn agent_thread_create(
     }
     drop(store);
 
-    // Hermes Desktop 同款草稿语义：空白 Thread 不提前制造持久 Session；首次
-    // prompt.submit 在同一 Gateway 连接内创建并绑定，避免孤儿空会话。
-    if !crate::agent::hermes::gateway_env_configured() {
-        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            let _ = crate::agent::store::RunStore::new(conn).delete_thread(&thread_id);
-        }
-        return ApiResponse::err(format!(
-            "Hermes Agent 未连接：请设置 {} 与 {}",
-            crate::agent::hermes::ENV_GATEWAY_URL,
-            crate::agent::hermes::ENV_GATEWAY_TOKEN
-        ));
-    }
+    // 空草稿不依赖任何引擎；首次 Run 才检查所选运行时。
     ApiResponse::ok(thread_id)
 }
 
@@ -447,7 +441,8 @@ pub async fn agent_thread_close(app: AppHandle, thread_id: String) -> ApiRespons
             Err(e) => return ApiResponse::err(e.to_string()),
         };
         let is_sidecar = match store.get_thread(&thread_id) {
-            Ok(thread) => thread.is_some_and(|t| matches!(t.engine.as_str(), "pi" | "claude_code")),
+            Ok(thread) => thread
+                .is_some_and(|t| matches!(t.engine.as_str(), "pi" | "claude_code" | "opencode")),
             Err(e) => return ApiResponse::err(e.to_string()),
         };
         if has_user_message || is_sidecar {
@@ -735,9 +730,17 @@ pub async fn agent_run_reconcile(
         ) {
             return ApiResponse::ok(snapshot);
         }
-        if store.get_run(&run_id).ok().flatten().is_some_and(|run| matches!(run.engine.as_str(), "pi" | "claude_code")) {
-            if let Err(error) = store.interrupt_orphaned_run(&run_id,
-                "智能体宿主执行已结束；本轮已中断，可在同一会话继续", super::pi::now_ms()) {
+        if store
+            .get_run(&run_id)
+            .ok()
+            .flatten()
+            .is_some_and(|run| matches!(run.engine.as_str(), "pi" | "claude_code" | "opencode"))
+        {
+            if let Err(error) = store.interrupt_orphaned_run(
+                &run_id,
+                "智能体宿主执行已结束；本轮已中断，可在同一会话继续",
+                super::pi::now_ms(),
+            ) {
                 return ApiResponse::err(error.to_string());
             }
             return match store.state_snapshot(&run_id) {
@@ -2274,9 +2277,8 @@ fn migrate_cron_prompt_to_natural_language(prompt: &str, skills: &[String]) -> O
             skill.as_str(),
             "sophonote-openrouter-rankings" | "mindbox-openrouter-rankings"
         )
-    })
-        && (branded_prompt.contains("action=refresh")
-            || branded_prompt.contains("action=model-board"))
+    }) && (branded_prompt.contains("action=refresh")
+        || branded_prompt.contains("action=model-board"))
     {
         Some(OPENROUTER_RANKINGS_PROMPT.into())
     } else {
@@ -3018,7 +3020,11 @@ fn canonical_hermes_tool_name(name: &str) -> String {
     if name.starts_with("mcp__sophonote_bridge__") {
         return name.to_string();
     }
-    for prefix in ["sophonote-bridge__", "sophonote-bridge_", "mcp_sophonote-bridge_"] {
+    for prefix in [
+        "sophonote-bridge__",
+        "sophonote-bridge_",
+        "mcp_sophonote-bridge_",
+    ] {
         if let Some(rest) = name.strip_prefix(prefix) {
             return format!("mcp__sophonote_bridge__{rest}");
         }
@@ -3112,7 +3118,9 @@ fn hermes_cron_tool_input(name: &str, arguments: &serde_json::Value) -> String {
                 .unwrap_or(0);
             format!("批量持久化本轮评分与 aspect/主题标注：{count} 条")
         }
-        "mcp__sophonote_bridge__read_discovery_feed" => "读取已存发现评分与分析，不重复抓取。".into(),
+        "mcp__sophonote_bridge__read_discovery_feed" => {
+            "读取已存发现评分与分析，不重复抓取。".into()
+        }
         "mcp__sophonote_bridge__save_discovery_report" => "保存 AI 日报、周报或月报。".into(),
         "mcp__sophonote_bridge__refresh_openrouter_rankings" => {
             "从 OpenRouter 官方 API 原子刷新完整模型榜快照。".into()
@@ -3250,7 +3258,9 @@ fn hermes_cron_run_steps(messages: &[serde_json::Value]) -> Vec<HermesCronRunSte
                 index: steps.len() + 1,
                 phase: phase.into(),
                 title: title.into(),
-                tool_name: tool_name.trim_start_matches("mcp__sophonote_bridge__").into(),
+                tool_name: tool_name
+                    .trim_start_matches("mcp__sophonote_bridge__")
+                    .into(),
                 status,
                 input: hermes_cron_tool_input(&tool_name, &arguments),
                 output,
@@ -3906,7 +3916,14 @@ pub async fn agent_hermes_skills_hub(
             serde_json::json!({"action": "search", "query": query}),
         )
     };
-    match gateway.call("skills.manage", params).await {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        gateway.call("skills.manage", params),
+    )
+    .await
+    .map_err(|_| "资源广场搜索超时，请刷新重试。".to_string())
+    .and_then(|result| result.map_err(|error| error.to_string()));
+    match result {
         Ok(value) if action == "browse" => match serde_json::from_value(value) {
             Ok(page) => ApiResponse::ok(page),
             Err(error) => ApiResponse::err(format!("Hermes Skills Hub 返回无效: {error}")),
@@ -4404,12 +4421,21 @@ pub async fn agent_run_start(
     request: AgentRunStartArgs,
     on_event: tauri::ipc::Channel<AgentEvent>,
 ) -> ApiResponse<AgentRunStartResult> {
+    // A visible current-document chip must never degrade to a chat-only run.
+    if let Some(document) = &request.focus_document {
+        if document.article_id.trim().is_empty() || document.markdown.is_none() {
+            return ApiResponse::err("当前笔记上下文不完整，请重新打开笔记后发送".into());
+        }
+    }
     let engine = match super::pi::resolve_request_engine(&app, &request) {
         Ok(engine) => engine,
         Err(error) => return ApiResponse::err(error),
     };
     if engine == "claude_code" {
         return super::pi::start_engine(app, request, on_event, "claude_code").await;
+    }
+    if engine == "opencode" {
+        return super::pi::start_engine(app, request, on_event, "opencode").await;
     }
     if engine == "pi" {
         return super::pi::start(app, request, on_event).await;
@@ -4571,8 +4597,25 @@ pub async fn agent_run_start(
 
     // provider/model 直接记录 Hermes Runtime 的真实选择。
     if let Err(e) = store.with_run_claim(&thread_id, "hermes", || {
-        store.create_run(&run_id, &thread_id, effective_project.as_deref(),
-            &selected_hermes_provider, &selected_hermes_model, Some(prompt_version.as_str()), max_turns, now_ms)?;
+        if store
+            .get_thread(&thread_id)?
+            .and_then(|thread| thread.project_id)
+            != effective_project
+        {
+            return Err(crate::agent::store::RunStoreError::Generic(
+                "任务所属项目已变化，请重新打开任务后再试".into(),
+            ));
+        }
+        store.create_run(
+            &run_id,
+            &thread_id,
+            effective_project.as_deref(),
+            &selected_hermes_provider,
+            &selected_hermes_model,
+            Some(prompt_version.as_str()),
+            max_turns,
+            now_ms,
+        )?;
         store.set_run_engine(&run_id, selected_engine_id, selected_engine_version)?;
         store.set_latest_run_id(&thread_id, &run_id, now_ms)
     }) {
@@ -5095,7 +5138,8 @@ mod scope_tests {
 
     fn thread(id: &str, project: Option<&str>) -> AgentThread {
         AgentThread {
-            engine: "hermes".into(),            id: id.into(),
+            engine: "hermes".into(),
+            id: id.into(),
             title: "t".into(),
             status: ThreadStatus::Completed,
             project_id: project.map(str::to_string),

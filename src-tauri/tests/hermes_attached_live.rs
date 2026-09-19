@@ -6,9 +6,9 @@
 //! cargo test --test hermes_attached_live -- --ignored --nocapture
 //! ```
 
+use serde_json::json;
 use sophonote_lib::agent::hermes::gateway_client::HermesGatewayConnection;
 use sophonote_lib::agent::hermes::{HermesGatewayEndpoint, ENV_GATEWAY_TOKEN, ENV_GATEWAY_URL};
-use serde_json::json;
 
 fn live_endpoint() -> Option<HermesGatewayEndpoint> {
     HermesGatewayEndpoint::from_env()

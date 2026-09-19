@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use super::{SophoNoteTool, ProvenanceRef, ToolDescriptor, ToolError, ToolOutput, UiArtifact};
+use super::{ProvenanceRef, SophoNoteTool, ToolDescriptor, ToolError, ToolOutput, UiArtifact};
 
 /// 单次 read_document 回填上限（超出截断；可用 offset 分页续读）——
 /// 防止一篇长文单次吃掉上下文窗口（max_turns 预算内还要留工具往返空间）

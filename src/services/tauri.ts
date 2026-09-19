@@ -1225,10 +1225,17 @@ export async function projectList(): Promise<Project[]> {
 }
 
 /** 新建项目（前端生成 uuid 与 createdAt） */
-export async function projectCreate(project: Project): Promise<Project> {
-  const res = await invoke<ApiResponse<Project>>('project_create', { project });
+export async function projectCreate(project: Project, workspaceRoot?: string): Promise<Project> {
+  const res = await invoke<ApiResponse<Project>>('project_create', { project, workspaceRoot: workspaceRoot ?? null });
   if (!res.success) throw new Error(res.error);
   return res.data!;
+}
+
+/** 改变任务后续所属范围；不复制历史或原生 Session。 */
+export async function projectAssignThread(threadId: string, projectId: string): Promise<void> {
+  if (!projectId.trim()) throw new Error('任务必须归属项目，请选择目标项目');
+  const res = await invoke<ApiResponse<void>>('project_assign_thread', { threadId, projectId });
+  if (!res.success) throw new Error(res.error ?? '移动任务失败');
 }
 
 /** 重命名项目 */
@@ -1847,6 +1854,22 @@ export interface HermesCapabilities {
   browserUrl: string;
 }
 
+export interface EngineCapabilities {
+  engine: 'hermes' | 'pi' | 'claude_code' | 'opencode';
+  available: boolean;
+  version: string | null;
+  error: string | null;
+  managedCategories: Array<'skills' | 'tools' | 'mcp' | 'hub'>;
+  tools: HermesToolInfo[];
+  hermes: HermesCapabilities | null;
+}
+
+export async function agentCapabilities(engine: EngineCapabilities['engine']): Promise<EngineCapabilities> {
+  const response = await invoke<ApiResponse<EngineCapabilities>>('agent_capabilities', { engine });
+  if (!response.success || !response.data) throw new Error(response.error ?? '无法读取引擎能力');
+  return response.data;
+}
+
 export interface ComputerUseStatus {
   embedded?: boolean;
   permissionOwner?: string | null;
@@ -2131,11 +2154,14 @@ export interface OpenVikingConfig {
   user: string;
   agent: string;
 }
+export interface OpenVikingEngineProbe { engine: string; success: boolean; message: string; }
+export interface OpenVikingProbe { version: string; engines: OpenVikingEngineProbe[]; }
 export interface OpenVikingStatus {
   config: OpenVikingConfig;
   activeProvider: string;
   available: boolean;
   keyConfigured: boolean;
+  hostEnginesEnabled?: boolean;
 }
 export interface OpenVikingSaveResult {
   credentialStorage: string | null;
@@ -2146,9 +2172,9 @@ export async function getOpenVikingStatus(): Promise<OpenVikingStatus> {
   if (!res.success || !res.data) throw new Error(res.error ?? '无法读取 OpenViking 配置');
   return res.data;
 }
-export async function saveOpenVikingConfig(config: OpenVikingConfig, apiKey: string, consent: boolean): Promise<OpenVikingSaveResult> {
+export async function saveOpenVikingConfig(config: OpenVikingConfig, apiKey: string, consent: boolean, allEngines = false): Promise<OpenVikingSaveResult> {
   const res = await invoke<ApiResponse<OpenVikingSaveResult>>('agent_openviking_save', {
-    request: { config, apiKey: apiKey.trim() || null, consent },
+    request: { config, apiKey: apiKey.trim() || null, consent, allEngines },
   });
   if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 配置保存失败');
   return res.data;
@@ -2158,8 +2184,8 @@ export async function disableOpenViking(): Promise<OpenVikingSaveResult> {
   if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 停用失败');
   return res.data;
 }
-export async function testOpenVikingConnection(config: OpenVikingConfig, apiKey: string): Promise<{ version: string }> {
-  const res = await invoke<ApiResponse<{ version: string }>>('agent_openviking_test', {
+export async function testOpenVikingConnection(config: OpenVikingConfig, apiKey: string): Promise<OpenVikingProbe> {
+  const res = await invoke<ApiResponse<OpenVikingProbe>>('agent_openviking_test', {
     request: { config, apiKey: apiKey.trim() || null },
   });
   if (!res.success || !res.data) throw new Error(res.error ?? 'OpenViking 连接测试失败');
@@ -2220,4 +2246,40 @@ export async function updateAgentRuntime(engine: UpdatableAgent): Promise<AgentU
 }
 export function listenAgentUpdateProgress(callback: (progress: AgentUpdateProgress) => void): Promise<UnlistenFn> {
   return listen<AgentUpdateProgress>('sophonote:agent-update-progress', (event) => callback(event.payload));
+}
+
+export async function opencodeRuntimeStatus(): Promise<PiRuntimeStatus> {
+  const result = await invoke<ApiResponse<PiRuntimeStatus>>('agent_opencode_status');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 OpenCode 状态');
+  return result.data;
+}
+export async function opencodeModelOptions(): Promise<HermesModelOptions> {
+  const result = await invoke<ApiResponse<HermesModelOptions>>('agent_opencode_models');
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法读取 OpenCode 模型');
+  return result.data;
+}
+
+export async function documentPreviewChatAnswer(documentId: string, baseVersion: number, expectedMarkdown: string, runId: string): Promise<PatchPreview> {
+  const result = await invoke<ApiResponse<PatchPreview>>('document_preview_chat_answer', { documentId, baseVersion, expectedMarkdown, runId });
+  if (!result.success || !result.data) throw new Error(result.error ?? '无法将回答提交到笔记审阅');
+  return result.data;
+}
+
+export interface OpenVikingMemoryEntry { uri: string; name: string; isDirectory: boolean; }
+export interface OpenVikingMemoryPage { entries: OpenVikingMemoryEntry[]; hasMore: boolean; }
+export interface OpenVikingMemoryDocument { uri: string; content: string; revision: string; }
+export async function listOpenVikingMemories(uri: string, offset = 0): Promise<OpenVikingMemoryPage> {
+  const res = await invoke<ApiResponse<OpenVikingMemoryPage>>('agent_openviking_list', { uri, offset });
+  if (!res.success || !res.data) throw new Error(res.error ?? '无法读取云端记忆目录');
+  return res.data;
+}
+export async function readOpenVikingMemory(uri: string): Promise<OpenVikingMemoryDocument> {
+  const res = await invoke<ApiResponse<OpenVikingMemoryDocument>>('agent_openviking_read', { uri });
+  if (!res.success || !res.data) throw new Error(res.error ?? '无法读取云端记忆');
+  return res.data;
+}
+export async function writeOpenVikingMemory(uri: string, content: string, baseRevision: string): Promise<OpenVikingMemoryDocument> {
+  const res = await invoke<ApiResponse<OpenVikingMemoryDocument>>('agent_openviking_write', { request: { uri, content, baseRevision } });
+  if (!res.success || !res.data) throw new Error(res.error ?? '云端记忆保存失败，请刷新确认');
+  return res.data;
 }

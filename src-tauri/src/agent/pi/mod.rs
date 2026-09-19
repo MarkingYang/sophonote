@@ -57,7 +57,7 @@ fn resolve_engine(
     thread: Option<&super::types::AgentThread>,
 ) -> Result<String, String> {
     let engine = requested.unwrap_or_else(|| thread.map_or("hermes", |t| t.engine.as_str()));
-    if !matches!(engine, "hermes" | "pi" | "claude_code") {
+    if !matches!(engine, "hermes" | "pi" | "claude_code" | "opencode") {
         return Err("未知智能体引擎".into());
     }
     if thread.is_some_and(|t| t.latest_run_id.is_some() && t.engine != engine) {
@@ -129,30 +129,39 @@ pub async fn agent_pi_status(app: AppHandle) -> ApiResponse<Value> {
 pub(crate) enum ExecutionRuntime {
     Pi(runtime::Runtime),
     Claude(super::claude::runtime::Runtime),
+    OpenCode(super::opencode::runtime::Runtime),
 }
 impl ExecutionRuntime {
     fn engine(&self) -> &'static str {
         match self {
             Self::Pi(_) => "pi",
             Self::Claude(_) => "claude_code",
+            Self::OpenCode(_) => "opencode",
         }
     }
     fn label(&self) -> &'static str {
         match self {
             Self::Pi(_) => "Pi",
             Self::Claude(_) => "Claude Code",
+            Self::OpenCode(_) => "OpenCode",
         }
     }
     fn version(&self) -> &str {
         match self {
             Self::Pi(r) => &r.version,
             Self::Claude(r) => &r.version,
+            Self::OpenCode(r) => &r.version,
         }
     }
     fn protected_root(&self) -> PathBuf {
         match self {
             Self::Pi(r) => r.extension.parent().unwrap_or(Path::new(".")).to_path_buf(),
             Self::Claude(r) => r.executable.clone(),
+            Self::OpenCode(r) => r
+                .executable
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
         }
     }
 }
@@ -235,7 +244,7 @@ fn prepare(
         provider
     };
     if !supported(&provider) {
-        return Err("Pi 当前支持 OpenAI 兼容与 Anthropic 供应商".into());
+        return Err(format!("{label} 当前支持 OpenAI 兼容与 Anthropic 供应商"));
     }
     let model = request
         .hermes_model
@@ -249,7 +258,7 @@ fn prepare(
         return Err("请先在 AI 模型设置中配置此供应商的 API Key".into());
     }
     let layout = crate::storage_layout::StorageLayout::resolve(app)?;
-    let home = if engine == "claude_code" {
+    let home = if matches!(engine, "claude_code" | "opencode") {
         layout
             .root
             .join(engine)
@@ -294,6 +303,7 @@ fn prepare(
         layout.hermes.clone(),
         layout.root.join("pi"),
         layout.root.join("claude_code"),
+        layout.root.join("opencode"),
         layout.version.clone(),
         runtime.protected_root(),
     ]
@@ -434,6 +444,8 @@ fn prepare(
     }
     let session = if engine == "claude_code" {
         super::claude::session_path(&home, &binding.thread_id)
+    } else if engine == "opencode" {
+        home.join("session-id")
     } else {
         sessions.join(format!("{}.jsonl", stable_id(&binding.thread_id)))
     };
@@ -482,6 +494,9 @@ fn claim_run(
         return Err("会话不存在".into());
     }
     if let Some((engine, latest, project)) = &existing {
+        if binding.project_id != *project {
+            return Err("任务所属项目已变化，请重新打开任务后再试".into());
+        }
         if latest.is_some() && engine != runtime.engine() {
             return Err("已有会话不能切换引擎".into());
         }
@@ -532,6 +547,16 @@ pub(crate) async fn start_engine(
         };
         let runtime = if engine == "claude_code" {
             ExecutionRuntime::Claude(super::claude::runtime::locate().await?)
+        } else if engine == "opencode" {
+            let handle = app.clone();
+            ExecutionRuntime::OpenCode(
+                tokio::task::spawn_blocking(move || {
+                    super::opencode::runtime::locate(&handle)
+                        .and_then(|root| super::opencode::runtime::verify(&root))
+                })
+                .await
+                .map_err(|e| e.to_string())??,
+            )
         } else {
             let handle = app.clone();
             let runtime = tokio::task::spawn_blocking(move || {
@@ -564,7 +589,7 @@ pub(crate) async fn start_engine(
                 .unwrap_or_else(|| format!("thread-{}", uuid::Uuid::new_v4())),
             run_id: format!("run-{}", uuid::Uuid::new_v4()),
         };
-        let prepared = prepare(&app, &request, &binding, runtime)?;
+        let mut prepared = prepare(&app, &request, &binding, runtime)?;
         let has_history: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_messages WHERE thread_id=?1 AND role='assistant')",
             [&binding.thread_id], |row| row.get(0)).map_err(|e| e.to_string())?;
@@ -627,6 +652,8 @@ pub(crate) async fn start_engine(
             run_id: binding.run_id.clone(),
         };
         tauri::async_runtime::spawn(async move {
+            let mut memory = None;
+            let original_message = request.message.clone();
             let outcome = async {
                 events
                     .emit(AgentEventPayload::RunStarted {
@@ -636,9 +663,24 @@ pub(crate) async fn start_engine(
                         skill: None,
                     })
                     .map_err(|e| e.to_string())?;
+                memory = super::openviking::RunMemory::begin(
+                    &app,
+                    engine,
+                    &original_message,
+                    &mut prepared.context,
+                    &events,
+                    &cancel,
+                )
+                .await;
+                if cancel.is_cancelled() {
+                    return Err("用户取消".into());
+                }
                 match &prepared.runtime {
                     ExecutionRuntime::Pi(_) => {
                         transport::run(&prepared, &binding, &events, &cancel).await
+                    }
+                    ExecutionRuntime::OpenCode(_) => {
+                        super::opencode::transport::run(&prepared, &binding, &events, &cancel).await
                     }
                     ExecutionRuntime::Claude(_) => {
                         super::claude::transport::run(&prepared, &binding, &events, &cancel).await
@@ -674,12 +716,30 @@ pub(crate) async fn start_engine(
                             let _ = store
                                 .refresh_thread_title_from_messages(&binding.thread_id, now_ms());
                         }
-                        let _ = events.emit(AgentEventPayload::RunCompleted {
-                            outcome: "completed".into(),
-                            final_answer: answer,
-                            model_calls: turns,
-                        });
-                        (RunStatus::Completed, ThreadStatus::Completed)
+                        if let Some(memory) = memory {
+                            memory
+                                .finish(
+                                    &binding.run_id,
+                                    &original_message,
+                                    &answer,
+                                    &events,
+                                    &cancel,
+                                )
+                                .await;
+                        }
+                        if cancel.is_cancelled() {
+                            let _ = events.emit(AgentEventPayload::RunCancelled {
+                                reason: "用户取消".into(),
+                            });
+                            (RunStatus::Cancelled, ThreadStatus::Cancelled)
+                        } else {
+                            let _ = events.emit(AgentEventPayload::RunCompleted {
+                                outcome: "completed".into(),
+                                final_answer: answer,
+                                model_calls: turns,
+                            });
+                            (RunStatus::Completed, ThreadStatus::Completed)
+                        }
                     }
                     Err(error) => {
                         let error = if prepared.key.is_empty() {
