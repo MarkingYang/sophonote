@@ -48,11 +48,11 @@ SophoNote 是一款面向知识工作者的 macOS 本地优先 AI 工作环境�
 
 ### 1.1 当前交付基线与阅读规则
 
-截至 2026-09-15，已公开的 macOS 版本为 **v0.1.0-preview.8 社区预览**。文档中的目标与当前状态分开：下表用于快速定位，具体证据保留在项目台账；优先级 P0/P1/P2 不代表已实现。后文标注“规划/冻结”的流程是验收目标，不是现有功能说明。
+截至 2026-09-19，已公开的 macOS 版本为 **v0.1.0-preview.9 社区预览**。文档中的目标与当前状态分开：下表用于快速定位，具体证据保留在项目台账；优先级 P0/P1/P2 不代表已实现。后文标注“规划/冻结”的流程是验收目标，不是现有功能说明。
 
 | 能力 | 当前事实 | 仍未完成 |
 |---|---|---|
-| 会话与三引擎 | Hermes/Pi/Claude Code 共用界面、模型配置和回复；首次 Run 固定，切换新建；Pi/Claude 两轮真实 DeepSeek 已验收 | 通用 ContextHandoff、跨项目归属与持久 ScopeSnapshot |
+| 会话与四引擎 | Hermes/Pi/Claude Code/OpenCode 共用界面、模型配置和回复；首次 Run 固定，切换新建；Pi/Claude 两轮真实 DeepSeek 已验收 | 通用 ContextHandoff、跨项目归属与持久 ScopeSnapshot |
 | 项目与任务列表 | 项目入口、目录绑定创建、任务搜索/置顶/归属、历史恢复及文件阅读已编码（2026-09-18） | 真实 Tauri 创建/切换/阅读与跨入口生命周期验收，见 NEXT-032 |
 | 笔记与项目文件 | 笔记用 Markdown 工作台；工作室入口隐藏，项目页按需浏览/阅读本地文件 | 完整 CodeChangeSession/逐 hunk 代码审查与 PreviewSupervisor |
 | 文档改写 | 三引擎当前文档/选区工作副本接入待审阅 Diff 与 DocumentService | 跨笔记独立 Thread/Memory scope、更多真实改写/撤销场景 |

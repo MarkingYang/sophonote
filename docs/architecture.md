@@ -1040,7 +1040,7 @@ CI 入口为 `.github/workflows/pack.yml`：`macos-14` 打 Apple Silicon pack，
 - `pnpm pack:macos` / `pnpm pack:windows` 是无证书可构建产物入口；`pnpm release:macos` / `pnpm release:windows` 才是带签名的 RC 入口。
 - `pnpm build` 执行 TypeScript + Vite 构建；Tauri pack 脚本按平台显式指定 `app,dmg` 或 `nsis`，避免在错误宿主上产出空包。
 - Vite 按 vendor-react、vendor-editor、vendor-render 分块，编辑器/渲染依赖随懒加载页面进入；构建配置对 preload helper 边界敏感，改动需重新核对启动依赖图。
-- 当前应用版本 `0.1.0`。2026-08-28 本机已产出 Apple Silicon unsigned DMG（`SophoNote_0.1.0_aarch64.dmg`），主程序 `arm64`、包内 Hermes 0.20.0；无 Developer ID，不是 RC。Windows NSIS 流水线已入库，真实 Windows 宿主验收仍待 Windows 机器/CI artifact。
+- 当前应用版本 `0.1.0-preview.9`（2026-09-19）：GitHub 已公开 Apple Silicon DMG（`SophoNote_0.1.0-preview.9_aarch64.dmg`），主程序 `arm64`，随包 Hermes 0.20.0、Pi 0.85.1、OpenCode 1.18.31；Claude Code 使用本机官方 CLI。无 Developer ID 公证，仍为社区预览，不是 RC。Windows 本次未产出安装包，哈希解析修复和后续验收见 NEXT-070/072。
 - Release `.app` 已在隔离 `HOME`、仅系统 `PATH`、无全局 Hermes/源码环境下完成 ad-hoc 构建冒烟：包内 Hermes 0.20.0 启动、逐文件校验、私有 Home 和父子进程回收均通过。此证据不替代 Developer ID/公证/独立 VM，也不替代 Windows Authenticode/干净机。
 - 发布实现必须区分“代码/流水线完成”和“平台签名 + 干净机证据通过”：前者可在无证书开发机/CI 完成，后者只有附上 Developer ID、notary request id、stapler、Gatekeeper（macOS）或 Authenticode（Windows）以及隔离用户/VM Run 证据后才能置为 Go。
 - 无服务器基础设施；外部模型、来源 API 和 MCP 由用户环境提供。
