@@ -61,7 +61,10 @@ digest_file() {
 }
 
 digest_hex() {
-  digest_file "$1" | awk '{print $1}'
+  # shasum prefixes the digest with a backslash when its filename contains
+  # backslashes (for example a GitHub Windows runner's native checkout path).
+  # Hash stdin so the filename's escaping never becomes part of the digest.
+  digest_stdin < "$1"
 }
 
 digest_stdin() {
