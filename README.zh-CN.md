@@ -28,10 +28,11 @@ SophoNote 是钉扎智能体 Sidecar 外围的 **Client Surface**：
 | 入口 | 作用 |
 |---|---|
 | 发现 | 看经过筛选和解读的 AI 动态、日报与模型榜 |
-| 项目 | 选择本地目录建立项目，组织任务、浏览文件并使用四引擎多轮对话；旧工作室数据保留，独立入口隐藏 |
-| 笔记本 | 编辑 Markdown；进入页面不会创建文档，只有显式“新建笔记”、模板或“导入功能范例”才创建 |
+| 项目 | 选择本地目录建立项目，组织任务，在 AI 对话右侧打开可缩放的文件夹、浏览器、终端扩展，并使用四引擎多轮对话；旧工作室数据保留，独立入口隐藏 |
+| 笔记本 | 多级文件夹组织 Markdown，支持目录 / 日期查看；进入页面不会创建文档，只有显式“新建笔记”、模板或“导入功能范例”才创建 |
 | 计划任务 | 管理本机保留的 Hermes 定时任务与运行历史；可从脱敏范例开始，范例和未配置模型的任务默认暂停 |
 | 工具 | 今日事项、待办与番茄钟 |
+| 设置 → 用量统计 | 汇总 Hermes、Pi、Claude Code、OpenCode 原生用量，支持按 Sidecar 和模型筛选 |
 
 操作说明：[使用手册](./skills/hermes/productivity/sophonote-help/references/user-manual.md)。写作与落盘：[Markdown 写作指南](./docs/sophonote-markdown-writing.zh-CN.md)。文档地图：[docs/README.zh-CN.md](./docs/README.zh-CN.md)。
 

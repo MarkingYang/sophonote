@@ -71,7 +71,7 @@ interface AppState {
   loadArticles: () => Promise<void>;
   /** 将按 itemId 精确读取的文章合并进有界列表缓存。 */
   upsertArticle: (article: Article) => void;
-  saveArticle: (article: Article) => Promise<void>;
+  saveArticle: (article: Article, folderId?: string | null) => Promise<void>;
   updateArticleContent: (id: string, content: string) => Promise<void>;
   updateArticleTitle: (id: string, title: string) => Promise<void>;
   deleteArticle: (id: string) => Promise<void>;
@@ -489,7 +489,7 @@ export const useAppStore = create<AppState>()(
       articles: [],
       loadArticles: async () => {
         try {
-          const articles = await tauri.getArticles(200);
+          const articles = await tauri.getArticles(200, true);
           set({ articles });
         } catch (e) {
           console.error('Failed to load articles:', e);
@@ -501,12 +501,12 @@ export const useAppStore = create<AppState>()(
             ? state.articles.map((a) => (a.id === article.id ? article : a))
             : [article, ...state.articles],
         })),
-      saveArticle: async (article) => {
+      saveArticle: async (article, folderId) => {
         // NB-31 失败契约（新建）：先后端落盘，成功才进内存列表并调度索引。
         // 创建失败时 store 不出现该记录，调用方不会跳转到不存在的笔记（防"假新建"）；
         // 异常向上抛出，由调用方决定提示与重试。
         try {
-          await tauri.insertArticle(article);
+          await (folderId ? tauri.insertArticle(article, folderId) : tauri.insertArticle(article));
         } catch (e) {
           console.error('Failed to save article:', e);
           throw e;

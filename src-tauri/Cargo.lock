@@ -4828,7 +4828,7 @@ dependencies = [
 
 [[package]]
 name = "sophonote"
-version = "0.1.0-preview.9"
+version = "0.1.0-preview.10"
 dependencies = [
  "anyhow",
  "async-trait",

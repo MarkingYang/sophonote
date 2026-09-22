@@ -9,6 +9,7 @@ interface VerticalResizeHandleProps {
   direction?: 1 | -1;
   onChange: (width: number) => void;
   onCommit?: (width: number) => void;
+  onDragStateChange?: (dragging: boolean) => void;
   label: string;
 }
 
@@ -27,6 +28,7 @@ export default function VerticalResizeHandle({
   direction = 1,
   onChange,
   onCommit,
+  onDragStateChange,
   label,
 }: VerticalResizeHandleProps) {
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -55,6 +57,7 @@ export default function VerticalResizeHandle({
         const startX = event.clientX;
         const startWidth = value;
         let latest = value;
+        onDragStateChange?.(true);
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
 
@@ -65,6 +68,7 @@ export default function VerticalResizeHandle({
           document.body.style.cursor = '';
           document.body.style.userSelect = '';
           cleanupRef.current = null;
+          onDragStateChange?.(false);
         };
         const onMove = (moveEvent: PointerEvent) => {
           latest = clamp(startWidth + direction * (moveEvent.clientX - startX), min, max);

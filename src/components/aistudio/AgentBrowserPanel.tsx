@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -28,6 +28,8 @@ import { subscribeTauriListener } from '../../services/browserErrors';
 interface AgentBrowserPanelProps {
   onAddToChat: (target: BrowserTarget) => void;
   onConnectionChange?: (connected: boolean) => void;
+  connectAgent?: boolean;
+  active?: boolean;
 }
 
 export interface BrowserTarget {
@@ -49,7 +51,8 @@ function ensureBrowserConnected(): Promise<HermesCapabilities> {
   return browserConnectionRequest;
 }
 
-export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: AgentBrowserPanelProps) {
+export default function AgentBrowserPanel({ onAddToChat, onConnectionChange, connectAgent = true, active = true }: AgentBrowserPanelProps) {
+  const panelRef = useRef<HTMLElement>(null);
   const saveArticle = useAppStore((state) => state.saveArticle);
   const [history, setHistory] = useState<BrowserTarget[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -61,6 +64,7 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
   const currentUrl = currentTarget?.url ?? '';
 
   useEffect(() => {
+    if (!connectAgent) return;
     let active = true;
     const connectBrowser = async () => {
       try {
@@ -76,7 +80,7 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
     };
     void connectBrowser();
     return () => { active = false; };
-  }, [onConnectionChange]);
+  }, [onConnectionChange, connectAgent]);
 
   const host = useMemo(() => {
     if (!currentTarget) return '';
@@ -130,10 +134,14 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
     if (currentUrl || !isTauri()) return;
     return subscribeTauriListener(
       getCurrentWebview().onDragDropEvent((event) => {
-        if (event.payload.type === 'drop') openDroppedFiles(event.payload.paths);
+        if (event.payload.type !== 'drop' || !active) return;
+        const rect = panelRef.current?.getBoundingClientRect();
+        const scale = window.devicePixelRatio || 1;
+        const { x, y } = event.payload.position;
+        if (rect && x / scale >= rect.left && x / scale <= rect.right && y / scale >= rect.top && y / scale <= rect.bottom) openDroppedFiles(event.payload.paths);
       }),
     );
-  }, [currentUrl, openDroppedFiles]);
+  }, [currentUrl, openDroppedFiles, active]);
 
   const moveHistory = (next: number) => {
     if (next < 0 || next >= history.length) return;
@@ -167,7 +175,7 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
   };
 
   return (
-    <section className="h-full min-h-0 flex flex-col bg-[var(--bg-canvas)]">
+    <section ref={panelRef} className="h-full min-h-0 flex flex-col bg-[var(--bg-canvas)]">
       <div className="h-10 shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-2 flex items-center gap-1.5">
         <button type="button" disabled={historyIndex <= 0} onClick={() => moveHistory(historyIndex - 1)} className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] disabled:opacity-30" title="后退"><ArrowLeft size={13} /></button>
         <button type="button" disabled={historyIndex < 0 || historyIndex >= history.length - 1} onClick={() => moveHistory(historyIndex + 1)} className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] disabled:opacity-30" title="前进"><ArrowRight size={13} /></button>
@@ -175,7 +183,7 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
         <form className="min-w-0 flex-1" onSubmit={(event) => { event.preventDefault(); navigate(draft); }}>
           <div className="relative">
             <Globe2 size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
-            <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入网址或 localhost" className="h-7 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-canvas)] pl-6 pr-2 font-mono text-xs text-[var(--text-secondary)] outline-none focus:border-[var(--accent)]" />
+            <input value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="浏览器地址" placeholder="输入网址或 localhost" className="h-7 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-canvas)] pl-6 pr-2 font-mono text-xs text-[var(--text-secondary)] outline-none focus:border-[var(--accent)]" />
           </div>
         </form>
         {currentTarget && <button type="button" onClick={() => void (currentTarget.localPath ? openPath(currentTarget.localPath) : openUrl(currentUrl))} className="h-7 w-7 rounded-md flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)]" title="在系统应用打开"><ExternalLink size={12} /></button>}
@@ -185,7 +193,7 @@ export default function AgentBrowserPanel({ onAddToChat, onConnectionChange }: A
 
       <div className="relative flex flex-1 min-h-0 bg-white">
         {currentUrl ? (
-          <NativeBrowserSurface key={frameKey} url={currentUrl} onError={setMessage} onFileDrop={openDroppedFiles} />
+          <NativeBrowserSurface key={frameKey} url={currentUrl} active={active} onError={setMessage} onFileDrop={openDroppedFiles} />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-[var(--bg-canvas)] px-8 text-center">
             <Globe2 size={24} className="text-[var(--text-disabled)]" />

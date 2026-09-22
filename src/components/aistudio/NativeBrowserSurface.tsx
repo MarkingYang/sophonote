@@ -11,6 +11,7 @@ import { subscribeTauriListener } from '../../services/browserErrors';
 
 interface NativeBrowserSurfaceProps {
   url: string;
+  active?: boolean;
   onError: (message: string | null) => void;
   onFileDrop?: (paths: string[]) => void;
 }
@@ -20,10 +21,11 @@ interface NativeBrowserSurfaceProps {
  * 第三方站点和本地内容不经过 iframe。
  * 页签保活隐藏时必须停泊到屏外，不能沿用上一帧矩形。
  */
-export default function NativeBrowserSurface({ url, onError, onFileDrop }: NativeBrowserSurfaceProps) {
+export default function NativeBrowserSurface({ url, onError, onFileDrop, active = true }: NativeBrowserSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
-  const pageActive = usePageSurfaceActive();
+  const surfaceActive = usePageSurfaceActive();
+  const pageActive = surfaceActive && active;
   const pageActiveRef = useRef(pageActive);
   const syncBoundsRef = useRef<() => void>(() => undefined);
   pageActiveRef.current = pageActive;

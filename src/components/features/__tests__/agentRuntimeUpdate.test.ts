@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import AgentRuntimeUpdateCard from '../AgentRuntimeUpdateCard';
 import * as api from '../../../services/tauri';
+import { openUrl } from '@tauri-apps/plugin-opener';
 vi.mock('../../../services/tauri', () => ({ getAgentUpdateStatus: vi.fn(), listenAgentUpdateProgress: vi.fn(), updateAgentRuntime: vi.fn() }));
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }));
 const status: api.AgentUpdateStatus = { engine: 'pi', currentVersion: '0.85.1', latestVersion: null, source: '随 SophoNote 分发', canUpdate: true, message: null, progress: null };
@@ -15,6 +16,7 @@ beforeEach(() => {
   vi.mocked(api.getAgentUpdateStatus).mockResolvedValue(status);
   vi.mocked(api.listenAgentUpdateProgress).mockResolvedValue(vi.fn());
   vi.mocked(api.updateAgentRuntime).mockResolvedValue(status);
+  vi.mocked(openUrl).mockResolvedValue(undefined);
   container = document.createElement('div'); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); });
@@ -48,4 +50,34 @@ it('重挂载恢复后台更新状态及下载进度', async () => {
   await act(async () => root.render(createElement(AgentRuntimeUpdateCard, { engine: 'pi' })));
   expect(button('更新中').disabled).toBe(true);
   expect(container.querySelector('progress')?.value).toBe(50);
+});
+it('OpenCode 共用完整更新卡片，检查、更新和说明链接均指向自身', async () => {
+  const opencode = { ...status, engine: 'opencode' as const, currentVersion: '1.18.31', latestVersion: '1.18.32' };
+  vi.mocked(api.getAgentUpdateStatus).mockResolvedValue(opencode);
+  vi.mocked(api.updateAgentRuntime).mockResolvedValue({ ...opencode, currentVersion: '1.18.32' });
+  await act(async () => root.render(createElement(AgentRuntimeUpdateCard, { engine: 'opencode' })));
+  for (const label of ['当前版本', '运行来源', '更新策略', '更新源', '官方稳定版', 'anomalyco/opencode', '下一轮生效']) {
+    expect(container.textContent).toContain(label);
+  }
+  await act(async () => button('检查版本').click());
+  expect(api.getAgentUpdateStatus).toHaveBeenLastCalledWith('opencode', true);
+  await act(async () => button('拉取更新').click());
+  expect(api.updateAgentRuntime).toHaveBeenCalledExactlyOnceWith('opencode');
+  expect(container.textContent).toContain('v1.18.32');
+  await act(async () => button('官方更新说明').click());
+  expect(openUrl).toHaveBeenCalledWith('https://github.com/anomalyco/opencode/releases');
+});
+it('OpenCode 忽略其他引擎进度，失败保留版本且允许重试', async () => {
+  let notify!: (progress: api.AgentUpdateProgress) => void;
+  vi.mocked(api.listenAgentUpdateProgress).mockImplementation(async (callback) => { notify = callback; return vi.fn(); });
+  vi.mocked(api.getAgentUpdateStatus).mockResolvedValue({ ...status, engine: 'opencode', currentVersion: '1.18.31' });
+  vi.mocked(api.updateAgentRuntime).mockRejectedValue(new Error('SHA-256 不匹配，保留原版本'));
+  await act(async () => root.render(createElement(AgentRuntimeUpdateCard, { engine: 'opencode' })));
+  await act(async () => notify({ engine: 'pi', phase: 'downloading', state: 'running', message: 'Pi 下载中', bytesDownloaded: 1, totalBytes: 2 }));
+  expect(container.textContent).not.toContain('Pi 下载中');
+  expect(button('拉取更新').disabled).toBe(false);
+  await act(async () => button('拉取更新').click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('SHA-256');
+  expect(container.textContent).toContain('v1.18.31');
+  expect(button('拉取更新').disabled).toBe(false);
 });

@@ -1,8 +1,7 @@
 import { confirmDiscard } from '../services/confirmDiscard';
-import OpenCodeRuntimeCard from '../components/features/OpenCodeRuntimeCard';
 import { useEffect, useRef, useState } from 'react';
 import AgentRuntimeUpdateCard from '../components/features/AgentRuntimeUpdateCard';
-import { openPath } from '@tauri-apps/plugin-opener';
+import { openPath, openUrl } from '@tauri-apps/plugin-opener';
 import { useAppStore } from '../stores/appStore';
 import {
   fetchSourcesNow,
@@ -400,6 +399,18 @@ export default function Settings() {
       cancelled = true;
     };
   }, [activeTab]);
+
+  const handleCheckSidecar = async () => {
+    setSidecarState('loading'); setSidecarMessage(''); setSidecarProgress(null);
+    try {
+      const status = await getHermesSidecarStatus();
+      setSidecarStatus(status);
+      setSidecarState(status.updateReady ? 'ready' : 'idle');
+    } catch (error) {
+      setSidecarState('error');
+      setSidecarMessage(error instanceof Error ? error.message : '无法读取 Hermes Runtime 状态');
+    }
+  };
 
   const handlePullSidecar = async () => {
     let unlisten: Awaited<ReturnType<typeof listenHermesSidecarProgress>> | undefined;
@@ -943,7 +954,7 @@ export default function Settings() {
 
         {activeTab === 'runtime' && (
           <div className="max-w-2xl space-y-4">
-            <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5">
+            <section aria-label="Hermes 更新" className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5">
               <div className="flex items-start justify-between gap-5">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -963,12 +974,12 @@ export default function Settings() {
                   className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {sidecarState === 'pulling' ? <Loader2 size={15} className="animate-spin" /> : <DownloadCloud size={15} />}
-                  {sidecarState === 'pulling' ? '拉取中…' : '拉取更新'}
+                  {sidecarState === 'pulling' ? '更新中…' : '拉取更新'}
                 </button>
               </div>
 
               <dl className="mt-5 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-[var(--border-default)] pt-4 text-xs">
-                <dt className="text-[var(--text-tertiary)]">当前运行</dt>
+                <dt className="text-[var(--text-tertiary)]">当前版本</dt>
                 <dd className="font-mono text-[var(--text-secondary)]">
                   {sidecarStatus ? `v${sidecarStatus.currentVersion} · ${sidecarStatus.currentCommit.slice(0, 12)}` : '读取中…'}
                 </dd>
@@ -976,6 +987,8 @@ export default function Settings() {
                 <dd className="text-[var(--text-secondary)]">
                   {sidecarStatus?.currentSource === 'official-update' ? '应用私有更新槽' : '随 SophoNote 分发的钉扎版本'}
                 </dd>
+                <dt className="text-[var(--text-tertiary)]">更新策略</dt>
+                <dd className="text-[var(--text-secondary)]">官方稳定版 · 重启后启用 · 启动失败回退随包</dd>
                 <dt className="text-[var(--text-tertiary)]">待启用</dt>
                 <dd className="font-mono text-[var(--text-secondary)]">
                   {sidecarStatus?.pendingVersion
@@ -1045,14 +1058,16 @@ export default function Settings() {
                   <span>{sidecarMessage || '更新已准备就绪，重启 SophoNote 后生效。'}</span>
                 </p>
               )}
-            </div>
-
-            <p className="px-1 text-xs leading-5 text-[var(--text-tertiary)]">
-              Hermes 新版会在重启后启用；如果启动失败，会自动回退到随包版本。
-            </p>
+              <div className="mt-4 flex gap-4 text-xs">
+                <button type="button" onClick={() => void handleCheckSidecar()} disabled={sidecarState === 'loading' || sidecarState === 'pulling'} className="inline-flex items-center gap-1 text-[var(--text-secondary)] disabled:opacity-50">
+                  <RefreshCw size={12} className={sidecarState === 'loading' ? 'animate-spin' : ''} />重新检测
+                </button>
+                <button type="button" onClick={() => void openUrl('https://github.com/NousResearch/hermes-agent/releases').catch((error) => { setSidecarMessage(String(error)); setSidecarState('error'); })} className="text-[var(--accent)]">官方更新说明</button>
+              </div>
+            </section>
             <AgentRuntimeUpdateCard engine="pi" />
             <AgentRuntimeUpdateCard engine="claude_code" />
-            <OpenCodeRuntimeCard />
+            <AgentRuntimeUpdateCard engine="opencode" />
           </div>
         )}
 

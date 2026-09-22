@@ -611,9 +611,13 @@ fn map_article_row(row: &rusqlite::Row) -> rusqlite::Result<crate::db::Article> 
 const ARTICLE_COLS: &str = "id, item_id, title, content, article_type, edited, created_at, updated_at, prompt_version, blocks_json";
 
 #[tauri::command]
-pub fn db_insert_article(app: AppHandle, article: crate::db::Article) -> ApiResponse<String> {
+pub fn db_insert_article(
+    app: AppHandle,
+    article: crate::db::Article,
+    folder_id: Option<String>,
+) -> ApiResponse<String> {
     // N0：先写 .md 文件（真相源），再落 DB 索引；DB content 字段不再承载正文
-    match crate::notes::insert_article(&app, &article) {
+    match crate::notes::insert_article_in_folder(&app, &article, folder_id.as_deref()) {
         Ok(_) => ApiResponse::ok("Article saved".to_string()),
         Err(e) => ApiResponse::err(e),
     }
@@ -729,7 +733,11 @@ pub fn db_rename_article(app: AppHandle, id: String, title: String) -> ApiRespon
 }
 
 #[tauri::command]
-pub fn db_get_articles(app: AppHandle, limit: Option<i32>) -> ApiResponse<Vec<crate::db::Article>> {
+pub fn db_get_articles(
+    app: AppHandle,
+    limit: Option<i32>,
+    include_notebook: Option<bool>,
+) -> ApiResponse<Vec<crate::db::Article>> {
     let db_path = get_db_path(&app);
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
@@ -737,7 +745,7 @@ pub fn db_get_articles(app: AppHandle, limit: Option<i32>) -> ApiResponse<Vec<cr
     };
 
     let sql = format!(
-        "SELECT {} FROM articles ORDER BY created_at DESC LIMIT ?1",
+        "SELECT {} FROM articles WHERE id IN (SELECT id FROM articles ORDER BY created_at DESC LIMIT ?1) OR (?2 AND article_type IN ('manual','journal')) ORDER BY created_at DESC",
         ARTICLE_COLS
     );
     let mut stmt = match conn.prepare(&sql) {
@@ -746,7 +754,10 @@ pub fn db_get_articles(app: AppHandle, limit: Option<i32>) -> ApiResponse<Vec<cr
     };
 
     let collected: Vec<crate::db::Article> = stmt
-        .query_map(rusqlite::params![limit.unwrap_or(100)], map_article_row)
+        .query_map(
+            rusqlite::params![limit.unwrap_or(100), include_notebook.unwrap_or(false)],
+            map_article_row,
+        )
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default();
 

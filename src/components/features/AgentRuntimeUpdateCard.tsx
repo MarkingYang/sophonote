@@ -5,8 +5,9 @@ import { getAgentUpdateStatus, listenAgentUpdateProgress, updateAgentRuntime, ty
 import { safeUnlisten } from '../../services/browserErrors';
 
 export default function AgentRuntimeUpdateCard({ engine }: { engine: UpdatableAgent }) {
-  const isPi = engine === 'pi';
-  const label = isPi ? 'Pi' : 'Claude Code';
+  const isManaged = engine !== 'claude_code';
+  const label = { pi: 'Pi', claude_code: 'Claude Code', opencode: 'OpenCode' }[engine];
+  const repository = engine === 'opencode' ? 'anomalyco/opencode' : 'earendil-works/pi';
   const [status, setStatus] = useState<AgentUpdateStatus | null>(null);
   const [progress, setProgress] = useState<AgentUpdateProgress | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,20 +60,20 @@ export default function AgentRuntimeUpdateCard({ engine }: { engine: UpdatableAg
         <div className="min-w-0">
           <h3 className="text-base font-semibold text-[var(--text-primary)]">{label}</h3>
           <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
-            {isPi ? '从 Pi 官方稳定版下载，在应用私有目录校验。下一轮使用新版，当前运行不受影响。' : '按本机安装方式调用官方更新器，会更新本机 Claude Code CLI。请先结束正在执行的 Claude Code 会话。'}
+            {isManaged ? `从 ${label} 官方稳定版下载，在应用私有目录校验。下一轮使用新版，当前运行不受影响。` : '按本机安装方式调用官方更新器，会更新本机 Claude Code CLI。请先结束正在执行的 Claude Code 会话。'}
           </p>
         </div>
         <button type="button" onClick={() => void update()} disabled={loading || busy || !status?.canUpdate}
           className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-sm font-medium text-white hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-50">
           {busy ? <Loader2 size={15} className="animate-spin" /> : <DownloadCloud size={15} />}
-          {busy ? '更新中…' : isPi ? '拉取更新' : '更新本机 CLI'}
+          {busy ? '更新中…' : isManaged ? '拉取更新' : '更新本机 CLI'}
         </button>
       </div>
       <dl className="mt-5 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-[var(--border-default)] pt-4 text-xs">
-        <dt className="text-[var(--text-tertiary)]">可用版本</dt><dd className="font-mono text-[var(--text-secondary)]">{status?.currentVersion ? `v${status.currentVersion}` : loading ? '读取中…' : '未就绪'}</dd>
+        <dt className="text-[var(--text-tertiary)]">当前版本</dt><dd className="font-mono text-[var(--text-secondary)]">{status?.currentVersion ? `v${status.currentVersion}` : loading ? '读取中…' : '未就绪'}</dd>
         <dt className="text-[var(--text-tertiary)]">运行来源</dt><dd className="text-[var(--text-secondary)]">{status?.source ?? '—'}</dd>
-        <dt className="text-[var(--text-tertiary)]">更新策略</dt><dd className="text-[var(--text-secondary)]">{isPi ? '官方稳定版 · 私有版本槽 · 校验失败保留原版' : '跟随原安装渠道 · 手动更新 · 下一轮生效'}</dd>
-        <dt className="text-[var(--text-tertiary)]">更新源</dt><dd className="text-[var(--text-secondary)]">{isPi ? 'earendil-works/pi · stable release' : 'Anthropic 官方更新器 / 原 Homebrew cask'}</dd>
+        <dt className="text-[var(--text-tertiary)]">更新策略</dt><dd className="text-[var(--text-secondary)]">{isManaged ? '官方稳定版 · 下一轮生效 · 校验失败保留原版' : '跟随原安装渠道 · 手动更新 · 下一轮生效'}</dd>
+        <dt className="text-[var(--text-tertiary)]">更新源</dt><dd className="text-[var(--text-secondary)]">{isManaged ? `${repository} · stable release` : 'Anthropic 官方更新器 / 原 Homebrew cask'}</dd>
         {status?.latestVersion && <><dt className="text-[var(--text-tertiary)]">官方稳定版</dt><dd className="font-mono text-[var(--text-secondary)]">v{status.latestVersion}{status.latestVersion === status.currentVersion ? ' · 已是当前版本' : ''}</dd></>}
       </dl>
       {progress && <div role="status" className={`mt-4 rounded-lg px-3 py-2.5 text-xs leading-5 ${progress.state === 'failed' ? 'bg-[var(--danger-subtle)] text-[var(--danger)]' : progress.state === 'completed' ? 'bg-[var(--success-subtle)] text-[var(--success)]' : 'bg-[var(--accent-subtle)] text-[var(--text-secondary)]'}`}>
@@ -82,8 +83,8 @@ export default function AgentRuntimeUpdateCard({ engine }: { engine: UpdatableAg
       </div>}
       {(error || status?.message) && <p role={error ? 'alert' : undefined} className={`mt-3 text-xs leading-5 ${error ? 'text-[var(--danger)]' : 'text-[var(--text-tertiary)]'}`}>{error || status?.message}</p>}
       <div className="mt-4 flex gap-4 text-xs">
-        <button type="button" onClick={() => void check()} disabled={loading || busy} className="inline-flex items-center gap-1 text-[var(--text-secondary)] disabled:opacity-50"><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />{isPi ? '检查版本' : '重新检测'}</button>
-        <button type="button" onClick={() => void openUrl(isPi ? 'https://github.com/earendil-works/pi/releases' : 'https://code.claude.com/docs/en/setup').catch((e) => setError(String(e)))} className="text-[var(--accent)]">官方更新说明</button>
+        <button type="button" onClick={() => void check()} disabled={loading || busy} className="inline-flex items-center gap-1 text-[var(--text-secondary)] disabled:opacity-50"><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />{isManaged ? '检查版本' : '重新检测'}</button>
+        <button type="button" onClick={() => void openUrl(isManaged ? `https://github.com/${repository}/releases` : 'https://code.claude.com/docs/en/setup').catch((e) => setError(String(e)))} className="text-[var(--accent)]">官方更新说明</button>
       </div>
     </section>
   );

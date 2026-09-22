@@ -50,6 +50,7 @@ export default function LocalTerminal({ root, permissionMode, clearToken = 0, on
     let inputDisposable: { dispose: () => void } | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
+    let bufferedBytes = 0;
     const pendingOutput = new Map<string, Uint8Array[]>();
 
     const terminal = new Terminal({
@@ -97,20 +98,23 @@ export default function LocalTerminal({ root, permissionMode, clearToken = 0, on
 
     const start = async () => {
       try {
-        [unlistenOutput, unlistenExit] = await Promise.all([
-          listenLocalTerminalOutput((payload) => {
-            const bytes = decodeBase64(payload.data);
-            if (payload.sessionId === sessionIdRef.current) terminal.write(bytes);
-            else if (sessionIdRef.current == null) {
-              const buffered = pendingOutput.get(payload.sessionId) ?? [];
-              buffered.push(bytes);
-              pendingOutput.set(payload.sessionId, buffered);
-            }
-          }),
-          listenLocalTerminalExit((payload) => {
-            if (payload.sessionId === sessionIdRef.current) terminal.write('\r\n\x1b[2m[进程已结束]\x1b[0m\r\n');
-          }),
-        ]);
+        const outputListener = await listenLocalTerminalOutput((payload) => {
+          if (disposed) return;
+          const bytes = decodeBase64(payload.data);
+          if (payload.sessionId === sessionIdRef.current) terminal.write(bytes);
+          else if (sessionIdRef.current == null && bufferedBytes + bytes.length <= 256 * 1024) {
+            const buffered = pendingOutput.get(payload.sessionId) ?? [];
+            buffered.push(bytes); bufferedBytes += bytes.length;
+            pendingOutput.set(payload.sessionId, buffered);
+          }
+        });
+        if (disposed) { safeUnlisten(outputListener); return; }
+        unlistenOutput = outputListener;
+        const exitListener = await listenLocalTerminalExit((payload) => {
+          if (!disposed && payload.sessionId === sessionIdRef.current) terminal.write('\r\n\x1b[2m[进程已结束]\x1b[0m\r\n');
+        });
+        if (disposed) { safeUnlisten(exitListener); return; }
+        unlistenExit = exitListener;
         fit.fit();
         const sessionId = await createLocalTerminal(root, terminal.cols, terminal.rows);
         if (disposed) {
@@ -119,7 +123,7 @@ export default function LocalTerminal({ root, permissionMode, clearToken = 0, on
         }
         sessionIdRef.current = sessionId;
         for (const bytes of pendingOutput.get(sessionId) ?? []) terminal.write(bytes);
-        pendingOutput.clear();
+        pendingOutput.clear(); bufferedBytes = 0;
         inputDisposable = terminal.onData((data) => {
           if (permissionRef.current === 'plan') return;
           const activeSessionId = sessionIdRef.current;
@@ -140,6 +144,9 @@ export default function LocalTerminal({ root, permissionMode, clearToken = 0, on
         fitAndResize();
         terminal.focus();
       } catch (error) {
+        safeUnlisten(unlistenOutput); unlistenOutput = null;
+        safeUnlisten(unlistenExit); unlistenExit = null;
+        if (disposed) return;
         onErrorRef.current?.(error instanceof Error ? error.message : String(error));
       }
     };

@@ -7,7 +7,7 @@ import MarkdownView from '../features/MarkdownView';
 export default function ProjectFilesPanel({ root, onAttach, onClose }: {
   root: string;
   onAttach: (path: string, name: string) => void;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const [entries, setEntries] = useState<LocalWorkspaceEntry[]>([]);
   const [children, setChildren] = useState<Record<string, LocalWorkspaceEntry[]>>({});
@@ -57,13 +57,13 @@ export default function ProjectFilesPanel({ root, onAttach, onClose }: {
       {expanded[entry.path] && renderEntries(children[entry.path] ?? [], depth + 1)}
     </div>
   ));
-  return <aside aria-label="项目文件" className="absolute inset-y-0 right-0 z-20 flex w-[min(420px,100%)] flex-col border-l border-[var(--border-default)] bg-[var(--bg-surface)] shadow-lg min-[1400px]:static min-[1400px]:shrink-0 min-[1400px]:shadow-none">
+  return <aside aria-label="项目文件" className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--bg-surface)]">
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 text-xs">
       {preview && <button type="button" title="返回文件列表" onClick={() => setPreview(null)} className="p-1"><ArrowLeft size={14} /></button>}
       <span className="min-w-0 flex-1 truncate font-medium" title={preview?.path ?? root}>{preview?.path ?? '项目文件'}</span>
       {busy && <Loader2 size={13} className="animate-spin" />}
       <button type="button" title="刷新项目文件" onClick={() => void refresh()} className="p-1"><RefreshCw size={13} /></button>
-      <button type="button" title="关闭项目文件" onClick={onClose} className="p-1"><X size={14} /></button>
+      {onClose && <button type="button" title="关闭项目文件" onClick={onClose} className="p-1"><X size={14} /></button>}
     </header>
     {error && <p role="alert" className="p-3 text-xs text-[var(--danger)]">{error}</p>}
     {preview ? <>

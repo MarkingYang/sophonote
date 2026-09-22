@@ -65,6 +65,12 @@ Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/Typ
 
 项目文件浏览复用 Rust `local_workspace_scan/list_directory/read`，按用户展开目录和打开文件有界读取；加入任务只传显式文件附件，仍由 Host 校验。交付文件写入沿用各引擎已有 Workspace/审批工具，受管笔记仍唯一经 DocumentService。任务移动事务拒绝空目标并检查目标存在与无非终态 Run，保留旧 Run 的项目审计与原生 Session，清理旧任务目录绑定；不会自动沉淀 Memory。
 
+### 1.5 笔记目录与项目扩展（2026-09-22）
+
+笔记目录采用 SQLite `notebook_folders(id,name,parent_id)` 与 `notebook_entries(article_id,folder_id)` 保存组织关系，与 `project_documents` 隔离。Rust 校验父级存在、同级唯一、循环移动与笔记类型；删除仅允许空文件夹，删除文章同步清理目录关系。新增笔记沿用 `notes::insert_article` 的 Markdown 唯一新建路径，扩展为可选文件夹参数，在同一数据库事务中保存索引和归属；文件/数据库仍不宣称跨介质原子性。正文路径继续为 `notes/<id>.md`，移动文件夹/笔记不重命名文件、不变更正文版本或双链。`db_get_articles(includeNotebook=true)` 在最近报告之外完整返回 manual/journal 笔记，避免目录关系完整而笔记被 200 篇列表上限截断；正文仍沿用文件回填。`DocWorkspace` 只持有目录快照与视图状态，编辑草稿、Change Session、日期聚合和保存队列沿用既有实现。
+
+项目 `ProjectExtensions` 负责 AI 对话上方工具行、扩展菜单与可缩放右栏，`ProjectChatPanel(showBrowserTab=false)` 保留单一会话内核。右栏按需装载 `ProjectFilesPanel`、人工模式 `AgentBrowserPanel` 或 `LocalTerminal`，项目切换按项目 ID 隔离；宽度经 settings 持久化，splitter 复用 `VerticalResizeHandle`。Browser 人工模式不调用 Hermes 能力连接，仍使用原生子 WebView，关闭即释放；终端仅在非计划模式显式打开时启动 Rust PTY，卸载回收。扩展只传显式附件给现有 Composer，不持有 Run 或引擎权限状态。手动终端沿用本机用户权限，项目目录是 cwd 而非文件系统沙箱；不将终端入口自动暴露为 Agent 工具。
+
 ## 2. 功能与非功能需求
 
 ### 2.1 功能需求摘要
@@ -1210,7 +1216,7 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 
 历史 Rig `AgentRun`、Adapter 与双跑夹具只供工程验证，不注册 Tauri 产品命令或任何运行时回退。现有 Hermes `AgentEngine` trait 不强行扩展成三引擎统一实现：Pi/Claude 共用 `pi/mod.rs` 的 Run 准备/claim，再进入各自 Transport。统一的是业务契约和产品体验。
 
-OpenCode 扩展（2026-09-18）：第四引擎 `opencode` 使用钉扎官方 standalone 二进制，通过本机认证 HTTP/SSE 原生 Server 协议执行；每个 Thread 独立私有 HOME/XDG 与原生 Session。禁用项目配置、共享、自动更新、原生工具和外部扩展，只接入每 Run 临时令牌保护的 Rust MCP 工具桥，沿用 Pi/Claude 的 Scope、审批、取消、RunStore 和文档工作副本回收。配置与所选凭据只通过子进程环境传递，原生 Session ID 在私有目录保存。更新随应用发布；首版不增加独立在线更新器。空 Thread 创建与 Hermes 就绪解耦，首次 Run 检查所选引擎。
+OpenCode 扩展（2026-09-18）：第四引擎 `opencode` 使用钉扎官方 standalone 二进制，通过本机认证 HTTP/SSE 原生 Server 协议执行；每个 Thread 独立私有 HOME/XDG 与原生 Session。禁用项目配置、共享、自动更新、原生工具和外部扩展，只接入每 Run 临时令牌保护的 Rust MCP 工具桥，沿用 Pi/Claude 的 Scope、审批、取消、RunStore 和文档工作副本回收。配置与所选凭据只通过子进程环境传递，原生 Session ID 在私有目录保存。更新由 Rust Host 显式检查/拉取 anomalyco/opencode 官方 stable Release，复用 Agent 更新状态与进度契约。只接受当前平台 HTTPS 官方资产、可信 SHA-256 与有界 ZIP；拒绝链接、路径穿越、重复文件及异常大小。私有 staging 完成本机签名、隔离 HOME 的认证 HTTP 健康/原生 Session/SSE 与必需 API 探测后，生成逐文件哈希清单并原子提交 active 指针。每次安装使用唯一不可变槽，不覆盖在途 Run 的二进制路径；下一轮解析更新槽，损坏或低于随包版本时回退随包。校验与探测不读取个人配置或模型密钥、不发起模型请求，原生自动更新始终关闭。空 Thread 创建与 Hermes 就绪解耦，首次 Run 检查所选引擎。
 
 笔记发送契约补强（ISSUE-033）：当前文档 chip 是本轮附件承诺，空正文仍生成工作副本；发送前解析失败时停止。已有聊天文章可从每条完整回答下的“写入当前笔记”明确请求保存；Host 按 runId 读取已完成回答并绑定点击时文档的 baseVersion/全文基线，空笔记填入、有正文则追加，经 DocumentService 生成 Diff。此操作不调用模型、不截断或猜测文章边界，不自动覆盖已有正文。存在选区或未完成提案时暂不显示此入口。
 
@@ -1430,7 +1436,7 @@ sequenceDiagram
 | `agent/pi/mod.rs` | Pi/Claude 共用的配置快照、Scope、Run claim、审批/文档工作副本准备 |
 | `agent/pi/transport.rs`、`agent/pi/tools.rs` | Pi JSONL RPC 与 Host 文件/命令工具 |
 | `agent/claude/mod.rs`、`agent/claude/transport.rs` | 模型协议兼容、官方 CLI stream-json、逐 Run MCP 工具桥 |
-| `agent/runtime_updates.rs` | Pi/Claude 更新入口、官方安装来源识别和在途 Run 门禁 |
+| `agent/runtime_updates.rs` | Pi/Claude/OpenCode 更新入口、独立进度与更新互斥、官方安装来源识别和 Claude 在途 Run 门禁 |
 | `agent/store.rs`、`agent/events.rs`、`agent/types.rs` | 统一业务 DTO、AgentEvent v4、RunStore 持久化与重放 |
 | `agent/run_controller.rs`、`agent/adapters.rs` | 历史 Rig 测试/迁移资产，不注册产品回退 |
 | `model/*`、`documents/*` | 非 Agent 模型出口；文档唯一安全落盘入口 |
@@ -2426,20 +2432,13 @@ WebView 只传 provider ID。Rust 重新从 SQLite 解析 Base URL、从 Keychai
 
 #### 23.10.3 用量数据流
 
-```mermaid
-flowchart LR
-    UI["设置 / 用量统计"] -->|days 7/30/90| HOST["Rust agent_hermes_usage"]
-    HOST -->|loopback + Session Token| API["Hermes api/analytics/usage"]
-    API --> LEDGER["Hermes Session / auxiliary usage ledger"]
-    API --> HOST
-    HOST -->|typed, non-secret DTO| UI
-```
+设置页通过 `agent_usage` 并行读取 Hermes analytics 与本应用隔离目录的 Pi JSONL、Claude Code JSONL、OpenCode SQLite。Rust 在 blocking worker 中只读原生文件，按 Sidecar 输出窗口汇总、模型明细、每日用量和来源状态；不扫描个人 CLI 历史，不建立第二套 usage 表，不向 WebView 回传正文或凭据。原生格式不支持/文件损坏显式标记部分不可用，不把读取失败当作零用量。
 
-当前用量页只统计 Hermes：Hermes Dashboard analytics 是其 Session、API call、输入/输出/cache-read/reasoning Token 和费用估算的真相源。Pi/Claude 的事件与模型配置已统一，但尚未纳入该用量聚合；不能用消息数推算或把 Hermes 账本标成全部引擎总量。Rust 将 snake_case Runtime 响应转换为稳定 camelCase DTO，并对缺失/`null` 数值归零；`days` 只允许 7、30、90。Runtime 当前只返回全部模型的 daily 与各模型窗口汇总，因此前端在“全部模型”下按自然日补齐窗口并以柱状图展示每日总 Token，选择单模型时只重算摘要/明细并隐藏趋势，不从总量比例推算逐日模型 Token。
+Pi 按会话条目 ID、Claude Code 按原生 assistant message ID 去重（多个内容块保留完整累计 usage），OpenCode 按 step-finish 主键统计调用，通过所属 message 关联模型；会话数按原生会话去重。窗口为近 7/30/90 天，Pi/Claude/OpenCode 使用调用时间；Hermes 保留 API 以会话起始时间统计的原生口径。每日按 UTC 日期归组，图表保留窗口边界所在日期，避免滚动窗口首日被截掉。
 
-Runtime `estimatedCost` / `actualCost` 是用量费用真相；摘要、逐日提示和模型明细复用同一格式化函数，普通界面只显示 `¥` 数值与“预估费用”，不展开价格来源、汇率或结算免责声明。当前 Hermes analytics DTO 仍以美元字段承载估算值，SophoNote 展示层保留兼容换算；价格目录落地后，DTO 改为携带调用时已固化的展示金额、币种和价格版本，React 不再自行换算。
+Token 总量遵循原生字段：Pi 优先 totalTokens；Claude 输入 + 输出 + 缓存读取 + 缓存写入；OpenCode 使用原生总量（缺失时依其分桶相加）。Hermes 输出已含 reasoning，不能再次加 reasoning；其 API 未给出的缓存写入/模型细分保持未知。筛选单模型时 Hermes 没有逐日模型数据，隐藏不完整趋势，不按比例伪造。组合筛选、Sidecar 对比和模型明细必须使用同一结果，跨模型会话数使用来源总计而非相加模型会话数。
 
-SophoNote 不新建 usage 表、不从消息正文估算 Token，也不持久化 Dashboard Session Token。统计 API 失败只返回可操作错误；不得影响 Runtime 运行、配置保存或 Agent 会话。未来若需要逐会话账单，优先扩展 Hermes 稳定 API/DTO，而不是旁路读取其内部 SQLite。
+费用只展示调用时固化的正数估算，缺失或零价格显示“—”；部分有价格时标注“已知费用”，不得把它当完整费用。保留当前 USD → CNY 展示兼容换算，不根据模型名称套当前价格重算历史。来源失败独立呈现，不能阻断会话或吞掉其他 Sidecar 的有效结果。Hermes 仍通过 loopback + Session Token 读取，原有 `agent_hermes_usage` 保持兼容。
 
 #### 23.10.4 价格目录与调价同步
 

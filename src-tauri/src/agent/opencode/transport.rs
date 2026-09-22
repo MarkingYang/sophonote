@@ -188,46 +188,38 @@ pub(crate) async fn run(
     }
 }
 
-async fn run_inner(
-    p: &Prepared,
-    binding: &HermesSessionBinding,
-    events: &Arc<EventEmitter>,
-    cancel: &CancellationToken,
-) -> Result<(String, usize), String> {
-    let ExecutionRuntime::OpenCode(runtime) = &p.runtime else {
-        return Err("OpenCode 运行时类型不匹配".into());
-    };
-    let bridge = crate::agent::claude::tools_server::start(
-        p.scope.clone(),
-        events.clone(),
-        &binding.run_id,
-        cancel.clone(),
-    )
-    .await?;
-    let password = uuid::Uuid::new_v4().to_string();
+pub(super) struct Server {
+    _child: ManagedChild,
+    _stdout: BufReader<tokio::process::ChildStdout>,
+    pub base: String,
+}
+
+pub(super) async fn start_server(
+    runtime: &super::runtime::Runtime,
+    home: &std::path::Path,
+    config: &Value,
+    password: &str,
+) -> Result<Server, String> {
     let mut command = tokio::process::Command::new(&runtime.executable);
     command
         .args(["serve", "--hostname", "127.0.0.1", "--port", "0"])
-        .current_dir(&p.home)
+        .current_dir(home)
         .env_clear()
-        .env("HOME", &p.home)
-        .env("USERPROFILE", &p.home)
-        .env("XDG_CONFIG_HOME", p.home.join("config"))
-        .env("XDG_DATA_HOME", p.home.join("data"))
-        .env("XDG_CACHE_HOME", p.home.join("cache"))
-        .env("XDG_STATE_HOME", p.home.join("state"))
-        .env(
-            "OPENCODE_CONFIG_CONTENT",
-            config(p, &bridge.url, &bridge.bearer).to_string(),
-        )
-        .env("OPENCODE_SERVER_PASSWORD", &password)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_STATE_HOME", home.join("state"))
+        .env("OPENCODE_CONFIG_CONTENT", config.to_string())
+        .env("OPENCODE_SERVER_PASSWORD", password)
         .env("OPENCODE_DISABLE_PROJECT_CONFIG", "true")
         .env("OPENCODE_DISABLE_AUTOUPDATE", "true")
         .env("OPENCODE_DISABLE_DEFAULT_PLUGINS", "true")
         .env("OPENCODE_DISABLE_EXTERNAL_SKILLS", "true")
         .env("OPENCODE_DISABLE_CLAUDE_CODE", "true")
         .env("OPENCODE_DISABLE_MODELS_FETCH", "true")
-        .env("OPENCODE_TEST_MANAGED_CONFIG_DIR", p.home.join("managed"))
+        .env("OPENCODE_TEST_MANAGED_CONFIG_DIR", home.join("managed"))
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -284,6 +276,38 @@ async fn run_inner(
     })
     .await
     .map_err(|_| "OpenCode 启动超时")??;
+    Ok(Server {
+        _child: child,
+        _stdout: reader,
+        base,
+    })
+}
+
+async fn run_inner(
+    p: &Prepared,
+    binding: &HermesSessionBinding,
+    events: &Arc<EventEmitter>,
+    cancel: &CancellationToken,
+) -> Result<(String, usize), String> {
+    let ExecutionRuntime::OpenCode(runtime) = &p.runtime else {
+        return Err("OpenCode 运行时类型不匹配".into());
+    };
+    let bridge = crate::agent::claude::tools_server::start(
+        p.scope.clone(),
+        events.clone(),
+        &binding.run_id,
+        cancel.clone(),
+    )
+    .await?;
+    let password = uuid::Uuid::new_v4().to_string();
+    let server = start_server(
+        runtime,
+        &p.home,
+        &config(p, &bridge.url, &bridge.bearer),
+        &password,
+    )
+    .await?;
+    let base = &server.base;
     let client = reqwest::Client::builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(10))

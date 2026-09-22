@@ -551,8 +551,7 @@ pub(crate) async fn start_engine(
             let handle = app.clone();
             ExecutionRuntime::OpenCode(
                 tokio::task::spawn_blocking(move || {
-                    super::opencode::runtime::locate(&handle)
-                        .and_then(|root| super::opencode::runtime::verify(&root))
+                    super::opencode::update::resolve(&handle).map(|(runtime, _)| runtime)
                 })
                 .await
                 .map_err(|e| e.to_string())??,

@@ -4,7 +4,7 @@ import type { HermesUsageDaily } from './tauri';
 export const USD_TO_CNY_RATE = 7.2;
 
 export const usageDayTotalTokens = (row: HermesUsageDaily) => (
-  row.inputTokens + row.outputTokens + row.cacheReadTokens + row.reasoningTokens
+  row.inputTokens + row.outputTokens + row.cacheReadTokens
 );
 
 export const usdToCny = (usd: number) => (

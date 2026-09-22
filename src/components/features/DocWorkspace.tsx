@@ -19,6 +19,8 @@ import { missingNoteExamples, noteExampleArticles, noteExamples } from '../../se
 import { countMatches, firstMatchContext } from '../../services/noteSearch';
 import SearchHighlight from './SearchHighlight';
 import MonthlyActivityCalendar from './MonthlyActivityCalendar';
+import NotebookTree from './NotebookTree';
+import { emptyNotebookTree, loadNotebookTree, type NotebookTree as NotebookTreeData } from '../../services/notebook';
 import ProjectChatPanel from '../aistudio/ProjectChatPanel';
 import type { RunContext } from '../../stores/agentStore';
 import { selectionLineRange } from '../../editor/selection/lineRange';
@@ -52,6 +54,8 @@ import {
   PanelLeftOpen,
   AlertTriangle,
   ArrowLeft,
+  CalendarDays,
+  FolderTree,
 } from 'lucide-react';
 
 function afterNextPaint(): Promise<void> {
@@ -153,6 +157,42 @@ export default function DocWorkspace({
     openArticleAtLine: state.openArticleAtLine,
   })));
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [notebookView, setNotebookView] = useState<'tree' | 'date'>('tree');
+  const [notebookTree, setNotebookTree] = useState<NotebookTreeData>(emptyNotebookTree);
+  const [notebookLoading, setNotebookLoading] = useState(!!journal);
+  const [notebookError, setNotebookError] = useState<string | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [moveNote, setMoveNote] = useState<Article | null>(null);
+  const treeRequest = useRef(0);
+  const reloadNotebook = useCallback(async () => {
+    const request = ++treeRequest.current;
+    setNotebookLoading(true); setNotebookError(null);
+    try {
+      const tree = await loadNotebookTree();
+      if (request === treeRequest.current) setNotebookTree(tree);
+    } catch (e) { if (request === treeRequest.current) setNotebookError(String(e)); }
+    finally { if (request === treeRequest.current) setNotebookLoading(false); }
+  }, []);
+  useEffect(() => {
+    if (!journal) return;
+    void reloadNotebook();
+    let active = true;
+    void getSetting('ui:notebook-view').then((value) => { if (active && value === 'date') setNotebookView('date'); }).catch(() => {});
+    return () => { active = false; treeRequest.current += 1; };
+  }, [journal, reloadNotebook]);
+  const changeNotebookView = async (view: 'tree' | 'date') => {
+    try { await wbRef.current?.flush(); }
+    catch (e) { setGenMessage(`❌ 保存失败：${String(e)}`); return false; }
+    setNotebookView(view); setBatchIds(new Set());
+    if (view === 'date' && selected) revealArticleDate(selected);
+    void updateSetting('ui:notebook-view', view).catch(() => {});
+    return true;
+  };
+  const saveNotebookArticle = async (article: Article, folderId = journal && notebookView === 'tree' ? selectedFolder : null) => {
+    await saveArticle(article, folderId);
+    if (folderId) setNotebookTree((old) => ({ ...old, entries: [...old.entries.filter((e) => e.articleId !== article.id), { articleId: article.id, folderId }] }));
+  };
+
   // NB-23：共享书写工作台句柄（flush / 捕获写回 / 新建进编辑态等跨组件通道）
   const wbRef = useRef<NoteWorkbenchHandle>(null);
   // NB-11 性能探针面板开关（状态栏「性能」；打点逻辑随工作台抽入 NoteWorkbench）
@@ -235,7 +275,7 @@ export default function DocWorkspace({
 
   // 本空间文档（scope 过滤）；双链/反链仍基于全量 articles 跨空间互通
   const docs = articles.filter(scope);
-  const dateFilteredDocs = journal && selectedDate
+  const dateFilteredDocs = journal && notebookView === 'date' && selectedDate
     ? docs.filter((article) => notebookDateKey(article) === selectedDate)
     : docs;
   const selected = dateFilteredDocs.find((a) => a.id === selectedId) || dateFilteredDocs[0];
@@ -480,7 +520,7 @@ export default function DocWorkspace({
       blocksJson: null,
     };
     try {
-      await saveArticle(article);
+      await saveNotebookArticle(article);
     } catch (e) {
       setGenMessage(`❌ 新建失败：${e instanceof Error ? e.message : String(e)}`);
       return;
@@ -566,6 +606,7 @@ export default function DocWorkspace({
   };
 
   const selectArticle = (id: string) => {
+    if (journal && notebookView === 'tree') setSelectedFolder(notebookTree.entries.find((entry) => entry.articleId === id)?.folderId ?? null);
     if (selected && id !== selected.id) void wbRef.current?.flush();
     setSelectedId(id); // 工作台 article 变更自动复位预览态
   };
@@ -663,7 +704,7 @@ export default function DocWorkspace({
 
   // 新建笔记：免弹窗直建「未命名文档」进编辑态（聚焦标题并全选，直接输入即改名）
   // NB-31：新建失败不选中不跳转，错误可见（store 不插入幽灵记录）
-  const handleNew = async () => {
+  const handleNew = async (folderId = journal && notebookView === 'tree' ? selectedFolder : null) => {
     await wbRef.current?.flush();
     const article: Article = {
       id: crypto.randomUUID(),
@@ -675,7 +716,7 @@ export default function DocWorkspace({
       blocksJson: null,
     };
     try {
-      await saveArticle(article);
+      await saveNotebookArticle(article, folderId);
     } catch (e) {
       setGenMessage(`❌ 新建失败：${e instanceof Error ? e.message : String(e)}`);
       return;
@@ -720,7 +761,7 @@ export default function DocWorkspace({
     };
     // NB-31：模板实例化落盘失败则不跳转、不关菜单（可重试），错误可见
     try {
-      await saveArticle(article);
+      await saveNotebookArticle(article);
     } catch (e) {
       setGenMessage(`❌ 新建失败：${e instanceof Error ? e.message : String(e)}`);
       return;
@@ -820,6 +861,10 @@ export default function DocWorkspace({
         onClick: () => void doExportArticle(doc),
       },
     ];
+    if (journal) items.push({
+      label: '移动到文件夹…', icon: <FolderOpen size={13} />,
+      onClick: () => { void changeNotebookView('tree').then((changed) => { if (changed) setMoveNote(doc); }); },
+    });
     // 仅笔记有 .md 落盘文件；deep-dive 等 DB 型文章无源文件，不显示该项
     if (doc.articleType === 'manual' || doc.articleType === 'journal') {
       items.push({
@@ -995,6 +1040,92 @@ export default function DocWorkspace({
     </section>
   );
 
+  const renderNoteRow = (a: Article) => {
+    const badge =
+      a.articleType === 'journal' && a.title === today
+        ? { text: '今日', cls: typeBadge.journal.cls }
+        : typeBadge[a.articleType] || typeBadge['deep-dive'];
+    const tags = collectTags(a).slice(0, 3);
+    // NB-08：搜索态列表卡片显示「命中上下文片段 + 高亮 + 命中数」（Obsidian 搜索面板对标）
+    const sq = search.trim();
+    const hits = sq ? countMatches(a.content, sq) : 0;
+    const sctx = sq && hits > 0 ? firstMatchContext(a.content, sq) : null;
+    const metaLine = (
+      <div className="sn-note-meta">
+        <span className="sn-note-kind">{badge.text}</span>
+        {a.edited && (
+          <span className="text-xs px-1.5 py-0.5 rounded-[6px] bg-[var(--warning-subtle)] text-[var(--warning)]">已编辑</span>
+        )}
+        {hits > 0 && (
+          <span className="text-xs text-[var(--gold)] font-medium">{hits} 处命中</span>
+        )}
+        {tags.map((t) => (
+          <span key={t} className="text-xs text-[var(--accent)]">#{t}</span>
+        ))}
+        <span className="sn-note-date">
+          {new Date(a.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+        </span>
+      </div>
+    );
+    // 行内重命名：点哪儿改哪儿（input 不能嵌 button，改名态整行换 div）
+    if (renamingDocId === a.id) {
+      return (
+        <div
+          key={a.id}
+          onContextMenu={(e) => e.preventDefault()}
+          className="w-full text-left p-3 rounded-lg bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]"
+        >
+          <input
+            autoFocus
+            value={renameDocDraft}
+            onChange={(e) => setRenameDocDraft(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') void submitRenameDoc(a);
+              if (e.key === 'Escape') {
+                renameDocDoneRef.current = true;
+                setRenamingDocId(null);
+              }
+            }}
+            onBlur={() => void submitRenameDoc(a)}
+            className="w-full px-1.5 py-0.5 text-[13px] font-medium rounded-md border border-[var(--accent)] focus:outline-none focus:shadow-[0_0_0_3px_var(--accent-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)]"
+          />
+          {metaLine}
+        </div>
+      );
+    }
+    return (
+      <button
+        key={a.id}
+        onClick={(e) => void handleListClick(e, a)}
+        onContextMenu={(e) => openDocMenu(e, a)}
+        aria-current={selected?.id === a.id ? 'page' : undefined}
+        className={`sn-note-row w-full text-left ${
+          batchIds.has(a.id)
+            ? 'is-batch-selected'
+            : selected?.id === a.id
+              ? 'is-selected'
+              : ''
+        }`}
+      >
+        <p className="text-[13px] leading-5 font-medium text-[var(--text-primary)] line-clamp-2">
+          <SearchHighlight text={a.title} query={sq} />
+        </p>
+        {sctx && (
+          <p className="text-xs text-[var(--text-tertiary)] line-clamp-2 mt-1">
+            <SearchHighlight
+              text={`${sctx.before}${sctx.match}${sctx.after}`}
+              query={sq}
+            />
+          </p>
+        )}
+        {metaLine}
+      </button>
+    );
+  };
+
   return (
     <div ref={workspaceRef} className="relative flex h-full min-w-0 overflow-hidden">
       {/* 左侧文档列表（NB-14 可折叠，折叠态持久化 settings） */}
@@ -1029,7 +1160,10 @@ export default function DocWorkspace({
           </button>
         </div>
         <div className="p-3 border-b border-[var(--border-default)] space-y-2">
-          {journal && (
+          {journal && <div className="flex rounded-lg bg-[var(--bg-canvas)] p-1" aria-label="笔记查看方式">
+            {([['tree', '目录', FolderTree], ['date', '日期', CalendarDays]] as const).map(([view, label, Icon]) => <button key={view} type="button" aria-pressed={notebookView === view} onClick={() => void changeNotebookView(view)} className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-xs ${notebookView === view ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-sm' : 'text-[var(--text-tertiary)]'}`}><Icon size={13} />{label}</button>)}
+          </div>}
+          {journal && notebookView === 'date' && (
             <MonthlyActivityCalendar
               month={calendarMonth}
               selectedDate={selectedDate}
@@ -1048,7 +1182,7 @@ export default function DocWorkspace({
             <div className="relative">
               <div className="flex gap-1">
                 <button
-                  onClick={handleNew}
+                  onClick={() => void handleNew()}
                   title="新建空白笔记"
                   className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)] text-xs font-medium hover:border-[var(--accent-border)] hover:text-[var(--accent)] transition-colors"
                 >
@@ -1075,7 +1209,7 @@ export default function DocWorkspace({
                   <div className="fixed inset-0 z-40" onClick={() => setTemplateMenuOpen(false)} />
                   <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)] py-1 max-h-64 overflow-y-auto">
                     <button
-                      onClick={handleNew}
+                      onClick={() => void handleNew()}
                       className="w-full flex items-center gap-1.5 text-left px-3 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-sunken)] transition-colors"
                     >
                       <FilePlus2 size={12} className="text-[var(--text-tertiary)]" /> 空白笔记
@@ -1172,96 +1306,17 @@ export default function DocWorkspace({
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-1" data-perf-scroll="doc-list">
-          {listDocs.length === 0 && (
+          {listDocs.length === 0 && (!journal || notebookView === 'date') && (
             <p className="text-xs text-[var(--text-tertiary)] text-center py-10 px-4">
               {journal && selectedDate ? `${selectedDate} 暂无笔记` : emptyHint}
             </p>
           )}
-          {listDocs.map((a) => {
-            const badge =
-              a.articleType === 'journal' && a.title === today
-                ? { text: '今日', cls: typeBadge.journal.cls }
-                : typeBadge[a.articleType] || typeBadge['deep-dive'];
-            const tags = collectTags(a).slice(0, 3);
-            // NB-08：搜索态列表卡片显示「命中上下文片段 + 高亮 + 命中数」（Obsidian 搜索面板对标）
-            const sq = search.trim();
-            const hits = sq ? countMatches(a.content, sq) : 0;
-            const sctx = sq && hits > 0 ? firstMatchContext(a.content, sq) : null;
-            const metaLine = (
-              <div className="sn-note-meta">
-                <span className="sn-note-kind">{badge.text}</span>
-                {a.edited && (
-                  <span className="text-xs px-1.5 py-0.5 rounded-[6px] bg-[var(--warning-subtle)] text-[var(--warning)]">已编辑</span>
-                )}
-                {hits > 0 && (
-                  <span className="text-xs text-[var(--gold)] font-medium">{hits} 处命中</span>
-                )}
-                {tags.map((t) => (
-                  <span key={t} className="text-xs text-[var(--accent)]">#{t}</span>
-                ))}
-                <span className="sn-note-date">
-                  {new Date(a.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
-                </span>
-              </div>
-            );
-            // 行内重命名：点哪儿改哪儿（input 不能嵌 button，改名态整行换 div）
-            if (renamingDocId === a.id) {
-              return (
-                <div
-                  key={a.id}
-                  onContextMenu={(e) => e.preventDefault()}
-                  className="w-full text-left p-3 rounded-lg bg-[var(--bg-surface)] shadow-[var(--shadow-sm)]"
-                >
-                  <input
-                    autoFocus
-                    value={renameDocDraft}
-                    onChange={(e) => setRenameDocDraft(e.target.value)}
-                    onFocus={(e) => e.currentTarget.select()}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === 'Enter') void submitRenameDoc(a);
-                      if (e.key === 'Escape') {
-                        renameDocDoneRef.current = true;
-                        setRenamingDocId(null);
-                      }
-                    }}
-                    onBlur={() => void submitRenameDoc(a)}
-                    className="w-full px-1.5 py-0.5 text-[13px] font-medium rounded-md border border-[var(--accent)] focus:outline-none focus:shadow-[0_0_0_3px_var(--accent-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                  />
-                  {metaLine}
-                </div>
-              );
-            }
-            return (
-              <button
-                key={a.id}
-                onClick={(e) => void handleListClick(e, a)}
-                onContextMenu={(e) => openDocMenu(e, a)}
-                aria-current={selected?.id === a.id ? 'page' : undefined}
-                className={`sn-note-row w-full text-left ${
-                  batchIds.has(a.id)
-                    ? 'is-batch-selected'
-                    : selected?.id === a.id
-                      ? 'is-selected'
-                      : ''
-                }`}
-              >
-                <p className="text-[13px] leading-5 font-medium text-[var(--text-primary)] line-clamp-2">
-                  <SearchHighlight text={a.title} query={sq} />
-                </p>
-                {sctx && (
-                  <p className="text-xs text-[var(--text-tertiary)] line-clamp-2 mt-1">
-                    <SearchHighlight
-                      text={`${sctx.before}${sctx.match}${sctx.after}`}
-                      query={sq}
-                    />
-                  </p>
-                )}
-                {metaLine}
-              </button>
-            );
-          })}
+          {journal && notebookView === 'tree' ? (
+            <NotebookTree tree={notebookTree} docs={listDocs} selectedFolder={selectedFolder} selectedNote={selected?.id ?? null}
+              searching={!!search.trim() || !!selectedTag} onSelectFolder={setSelectedFolder} onChange={setNotebookTree}
+              onNewNote={(folderId) => { setSelectedFolder(folderId); void handleNew(folderId); }} renderNote={renderNoteRow}
+              moveNote={moveNote} onMoveDone={() => setMoveNote(null)} loading={notebookLoading} error={notebookError} onRetry={() => void reloadNotebook()} />
+          ) : listDocs.map(renderNoteRow)}
         </div>
         {/* NB-30：批量操作栏（Shift+范围选 / ⌘ 切换勾选后出现） */}
         {batchIds.size > 0 && (

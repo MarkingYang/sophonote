@@ -36,6 +36,7 @@ const button = (label: string) => [...host.querySelectorAll('button')].find((nod
 const click = async (label: string) => { await act(async () => button(label).click()); };
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
@@ -47,7 +48,7 @@ beforeEach(() => {
   rememberWorkspaceBinding('ui:project-workspace:pb', null);
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe('项目入口与任务范围', () => {
   it('首页以项目为中心，不挂载会话；新建目录使用系统原生创建能力', async () => {

@@ -7,6 +7,7 @@ pub mod global_search; // NB-14 全局搜索（轨道 A 只读扩展文件）
 pub mod knowledge;
 pub mod local_terminal;
 pub mod local_workspace;
+pub mod notebook;
 pub mod notes;
 pub mod openrouter_rankings;
 pub mod project_tree; // NB-19 项目内文档组织树（轨道 A 用户指令例外，AG-11 落地）
@@ -321,6 +322,10 @@ pub fn run() {
             commands::keychain_delete_api_key,
             commands::ai_generate_embedding,
             commands::db_insert_article,
+            notebook::notebook_tree,
+            notebook::notebook_folder_save,
+            notebook::notebook_folder_delete,
+            notebook::notebook_note_move,
             commands::db_update_article,
             commands::db_rename_article,
             commands::db_delete_article,
@@ -407,6 +412,7 @@ pub fn run() {
             agent::commands::agent_hermes_skills,  // Hermes Runtime 原生 Skill 目录
             agent::commands::agent_hermes_models,  // Hermes Runtime 原生模型/Provider 目录
             agent::commands::agent_hermes_model_catalog, // 设置页 Runtime 完整发现目录
+            agent::usage::agent_usage,
             agent::commands::agent_hermes_usage,   // Hermes Runtime 精确 Token/调用用量
             agent::commands::agent_hermes_capabilities, // Hermes Runtime Skill/Tool/MCP/Browser 快照
             agent::capabilities::agent_capabilities,

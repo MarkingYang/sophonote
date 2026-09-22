@@ -13,3 +13,10 @@ it('保留后端在途 Run 错误，不把失败当成更新成功', async () =>
   await expect(updateAgentRuntime('claude_code')).rejects.toThrow('请先结束');
   expect(invoke).toHaveBeenCalledExactlyOnceWith('agent_runtime_update', { engine: 'claude_code' });
 });
+it('OpenCode 状态和拉取复用统一 Host 契约', async () => {
+  vi.mocked(invoke).mockResolvedValue({ success: true, data: { engine: 'opencode', currentVersion: '1.18.31' } });
+  await getAgentUpdateStatus('opencode', true);
+  expect(invoke).toHaveBeenLastCalledWith('agent_runtime_update_status', { engine: 'opencode', check: true });
+  await updateAgentRuntime('opencode');
+  expect(invoke).toHaveBeenLastCalledWith('agent_runtime_update', { engine: 'opencode' });
+});

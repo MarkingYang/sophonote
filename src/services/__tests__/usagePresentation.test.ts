@@ -28,6 +28,6 @@ describe('usage presentation', () => {
 
     expect(rows.map((row) => row.day)).toEqual(['2026-08-17', '2026-08-18', '2026-08-19']);
     expect(rows[0].inputTokens).toBe(0);
-    expect(usageDayTotalTokens(rows[1])).toBe(165);
+    expect(usageDayTotalTokens(rows[1])).toBe(160);
   });
 });

@@ -210,6 +210,7 @@ pub fn init_db(app: &AppHandle) -> Result<(), String> {
 /// 全量建表（幂等）：全部 CREATE IF NOT EXISTS + ensure_columns 补列 + Track B 项目表。
 /// 自 init_db 抽出，供单测内存库原样复用（不含默认数据播种）。
 pub fn create_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    crate::notebook::create_schema(conn)?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS sources (
@@ -859,6 +860,7 @@ fn ensure_columns(
 /// 同步清理该文档的 revision/operation 孤儿行（无 FK，不清理会残留审计垃圾）。
 /// 文件与向量索引的清理不在这里——由调用方尽力而为，失败不回滚。
 pub fn delete_article_rows(conn: &rusqlite::Connection, id: &str) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM notebook_entries WHERE article_id = ?1", [id])?;
     conn.execute(
         "DELETE FROM project_documents WHERE article_id = ?1",
         rusqlite::params![id],

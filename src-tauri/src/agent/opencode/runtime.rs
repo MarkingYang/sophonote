@@ -66,6 +66,18 @@ pub fn verify(root: &Path) -> Result<Runtime, String> {
 }
 
 pub(super) fn verify_version(root: &Path, version: &str, digest: &str) -> Result<Runtime, String> {
+    if std::fs::symlink_metadata(root)
+        .map_err(|_| "OpenCode 资源不可访问")?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("OpenCode 更新槽不允许链接".into());
+    }
+    let metadata = std::fs::symlink_metadata(root.join("manifest.json"))
+        .map_err(|_| "OpenCode 缺少完整性清单")?;
+    if !metadata.is_file() || metadata.len() > 16384 {
+        return Err("OpenCode 完整性清单类型或大小无效".into());
+    }
     let data = std::fs::read(root.join("manifest.json")).map_err(|_| "OpenCode 缺少完整性清单")?;
     let manifest: Manifest = serde_json::from_slice(&data).map_err(|_| "OpenCode 清单无效")?;
     if manifest.version != version
@@ -74,11 +86,32 @@ pub(super) fn verify_version(root: &Path, version: &str, digest: &str) -> Result
     {
         return Err("OpenCode 版本、平台或分发校验不匹配".into());
     }
-    if !manifest.files.contains_key(&manifest.executable) {
-        return Err("OpenCode 清单缺少执行文件或权限扩展".into());
+    let executable = if cfg!(windows) {
+        "opencode.exe"
+    } else {
+        "opencode"
+    };
+    if manifest.executable != executable || !manifest.files.contains_key(executable) {
+        return Err("OpenCode 清单缺少预期执行文件".into());
     }
     let root = root.canonicalize().map_err(|_| "OpenCode 资源不可访问")?;
+    for entry in std::fs::read_dir(&root).map_err(|_| "OpenCode 文件列表不可读")? {
+        let entry = entry.map_err(|_| "OpenCode 文件不可读")?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or("OpenCode 文件名无效")?;
+        if !entry
+            .file_type()
+            .map_err(|_| "OpenCode 文件类型不可读")?
+            .is_file()
+            || (name != "manifest.json" && !manifest.files.contains_key(name))
+        {
+            return Err("OpenCode 资源包含链接或未登记文件".into());
+        }
+    }
     for (relative, expected) in &manifest.files {
+        if ![executable, "LICENSE.opencode", "entitlements.plist"].contains(&relative.as_str()) {
+            return Err("OpenCode 清单包含非预期路径".into());
+        }
         let path = root
             .join(relative)
             .canonicalize()

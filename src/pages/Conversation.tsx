@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Archive, ArrowLeft, ChevronRight, FolderKanban, FolderOpen, FolderPlus, Loader2, MoreHorizontal, Pin, Plus, Search, X } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { isPlaceholderThreadTitle, useAgentStore, type AgentAttachmentInput, type AgentThread } from '../stores/agentStore';
@@ -8,7 +8,7 @@ import { PROJECT_WORKSPACE_KEY_PREFIX, authorizeWorkspace, loadWorkspaceBinding,
 import ProjectChatPanel from '../components/aistudio/ProjectChatPanel';
 import ProjectHome from '../components/aistudio/ProjectHome';
 
-const ProjectFilesPanel = lazy(() => import('../components/aistudio/ProjectFilesPanel'));
+import ProjectExtensions from '../components/aistudio/ProjectExtensions';
 const titleOf = (thread: AgentThread) => isPlaceholderThreadTitle(thread.title) ? '新任务' : thread.title;
 const statusOf = (thread: AgentThread) => ({ completed: '已完成', failed: '失败', cancelled: '已取消', running: '待继续' })[thread.status] ?? '历史';
 const timeOf = (ms: number) => new Date(ms).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -34,7 +34,6 @@ export default function Conversation() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [showFiles, setShowFiles] = useState(false);
   const [fileRequest, setFileRequest] = useState<{ nonce: number; attachment: AgentAttachmentInput } | null>(null);
   const [creating, setCreating] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -70,7 +69,7 @@ export default function Conversation() {
 
   const returnHome = () => {
     selectionGeneration.current += 1;
-    setHome(true); setShowFiles(false); setMenuId(null); setError(null);
+    setHome(true); setMenuId(null); setError(null);
   };
   useEffect(() => {
     window.addEventListener('sophonote:projects-home', returnHome);
@@ -79,7 +78,7 @@ export default function Conversation() {
 
   const selectProject = (id: string, newTask = false) => {
     if (!useProjectStore.getState().projects.some((item) => item.id === id)) { returnHome(); return; }
-    setHome(false); setQuery(''); setShowFiles(false);
+    setHome(false); setQuery('');
     const remembered = lastThreadByProject.current[id];
     const thread = !newTask && all.find((item) => item.id === remembered && item.projectId === id);
     if (thread) { void openThread(thread); return; }
@@ -192,24 +191,24 @@ export default function Conversation() {
     <main className="relative flex min-w-0 flex-1 flex-col">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-4" data-tauri-drag-region>
         <div className="min-w-0 flex-1 truncate text-xs font-semibold">{project && <span className="font-normal text-[var(--text-tertiary)]">{project.name} / </span>}{current ? titleOf(current) : '新任务'}</div>
-        <button type="button" disabled={busy || (!binding && !!(current && running[current.id]))} onClick={() => { if (binding) setShowFiles(!showFiles); else if (workspaceKey) void chooseFolder(false); else startCreate(); }} title={binding?.root ?? '选择项目文件夹'} className={`${buttonClass} inline-flex max-w-56 items-center gap-1.5 text-xs`}><FolderOpen size={13} /><span className="truncate">{binding ? binding.name : projectId ? '选择文件夹' : '创建项目'}</span></button>
+
       </header>
       {error && !creating && <div role="alert" className="flex items-center gap-2 border-b border-[var(--border-default)] px-4 py-2 text-xs text-[var(--danger)]"><span className="flex-1">{error}</span><button type="button" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={13} /></button></div>}
       <div className="relative flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
-          {!bindingReady ? <div className="flex h-full items-center justify-center"><Loader2 size={18} className="animate-spin text-[var(--text-tertiary)]" /></div> : projectId && !binding ? <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-[var(--text-secondary)]"><FolderOpen size={32} /><p>为项目选择资料与交付文件夹</p><button type="button" onClick={() => void chooseFolder(false)} className="btn-primary px-4 py-2 text-xs">选择文件夹</button></div> : <ProjectChatPanel
+          {!bindingReady ? <div className="flex h-full items-center justify-center"><Loader2 size={18} className="animate-spin text-[var(--text-tertiary)]" /></div> : projectId && !binding ? <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-[var(--text-secondary)]"><FolderOpen size={32} /><p>为项目选择资料与交付文件夹</p><button type="button" onClick={() => void chooseFolder(false)} className="btn-primary px-4 py-2 text-xs">选择文件夹</button></div> : <ProjectExtensions key={projectId} root={binding!.root} permissionMode={binding!.permissionMode} onAttach={(attachment) => setFileRequest({ nonce: Date.now(), attachment })}><ProjectChatPanel
             key={viewKey}
             layout="workspace" projectId={projectId} projectName={project?.name ?? '项目'} threadId={current?.id ?? null}
             draftSession={draft || !current} onDraftSessionChange={setDraft}
             onThreadCreated={(id) => { lastThreadByProject.current[projectId ?? ''] = id; useAgentStore.getState().selectThread(id); setDraft(false); }}
             workspaceRoot={binding?.root ?? null} workspacePermissionMode={binding?.permissionMode ?? 'ask'}
             onWorkspacePermissionModeChange={(mode) => void setPermission(mode)}
-            fileContextRequest={fileRequest} showThreadNavigation={false} showEmptyState={false}
+            fileContextRequest={fileRequest} showBrowserTab={false} showThreadNavigation={false} showEmptyState={false}
             emptyHint={binding ? `读取「${binding.name}」中的资料，描述要完成的任务。交付产物保存在此文件夹。` : '描述要完成的任务，或创建项目组织资料与交付产物。'}
             composerPlaceholder="描述要完成的任务…"
-          />}
+          /></ProjectExtensions>}
         </div>
-        {showFiles && binding && <Suspense fallback={<Loader2 size={18} className="m-4 animate-spin" />}><ProjectFilesPanel key={binding.root} root={binding.root} onClose={() => setShowFiles(false)} onAttach={(path, name) => { setFileRequest({ nonce: Date.now(), attachment: { id: crypto.randomUUID(), kind: 'file', name, path } }); setShowFiles(false); }} /></Suspense>}
+
       </div>
     </main>
     </>}

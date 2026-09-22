@@ -67,3 +67,5 @@ pub mod claude;
 pub mod runtime_updates;
 
 pub mod opencode;
+
+pub mod usage;

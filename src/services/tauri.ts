@@ -593,8 +593,8 @@ export async function deleteApiKey(provider: string): Promise<void> {
 
 // ==================== 文章（深度解读） API ====================
 
-export async function getArticles(limit?: number): Promise<import('../types').Article[]> {
-  const res = await invoke<ApiResponse<import('../types').Article[]>>('db_get_articles', { limit });
+export async function getArticles(limit?: number, includeNotebook = false): Promise<import('../types').Article[]> {
+  const res = await invoke<ApiResponse<import('../types').Article[]>>('db_get_articles', { limit, includeNotebook });
   if (!res.success) throw new Error(res.error);
   return res.data || [];
 }
@@ -606,8 +606,8 @@ export async function getDeepDiveByItem(itemId: string): Promise<import('../type
   return res.data ?? null;
 }
 
-export async function insertArticle(article: import('../types').Article): Promise<string> {
-  const res = await invoke<ApiResponse<string>>('db_insert_article', { article });
+export async function insertArticle(article: import('../types').Article, folderId?: string | null): Promise<string> {
+  const res = await invoke<ApiResponse<string>>('db_insert_article', { article, ...(folderId ? { folderId } : {}) });
   if (!res.success) throw new Error(res.error);
   return res.data!;
 }
@@ -2216,7 +2216,7 @@ export async function claudeModelOptions(): Promise<HermesModelOptions> {
   return result.data;
 }
 
-export type UpdatableAgent = 'pi' | 'claude_code';
+export type UpdatableAgent = 'pi' | 'claude_code' | 'opencode';
 export interface AgentUpdateProgress {
   engine: UpdatableAgent;
   phase: string;

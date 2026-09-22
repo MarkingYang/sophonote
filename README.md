@@ -28,10 +28,11 @@ Primary navigation: Discover, Projects, Notes, Scheduled Tasks, Tools. Inbox sta
 | Surface | Role |
 |---|---|
 | Discover | Filtered and interpreted AI news, daily reports, and model rankings |
-| Projects | Bind a local folder, organize tasks, browse files, and run multi-turn conversations with four engines; existing Studio data is retained and its standalone entry is hidden |
-| Notes | Edit Markdown; opening Notes never creates a document—creation requires an explicit New Note, template, or Import Examples action |
+| Projects | Bind a local folder, organize tasks, use resizable file/browser/terminal extensions beside AI chat, and run multi-turn conversations with four engines; existing Studio data is retained and its standalone entry is hidden |
+| Notes | Organize Markdown in nested folders or browse by date; opening Notes never creates a document—creation requires an explicit New Note, template, or Import Examples action |
 | Scheduled Tasks | Manage locally preserved Hermes cron jobs and run history; sanitized examples and jobs without an explicit model stay paused |
 | Tools | Today view, todos, and pomodoro |
+| Settings → Usage | Aggregate native usage across Hermes, Pi, Claude Code, and OpenCode, with Sidecar and model filters |
 
 How to use: [user manual](./skills/hermes/productivity/sophonote-help/references/user-manual.md) (Chinese, matches the UI). Writing and persist: [Markdown writing guide](./docs/sophonote-markdown-writing.md). Docs map: [docs/README.md](./docs/README.md).
 

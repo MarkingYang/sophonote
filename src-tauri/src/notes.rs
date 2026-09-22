@@ -203,10 +203,25 @@ pub fn rename_article_file(app: &AppHandle, id: &str, new_title: &str) {
 
 /// 统一新建入口（手动 / 夜间解读）：先文件后 DB 索引，DB 不再存正文
 pub fn insert_article(app: &AppHandle, article: &Article) -> Result<(), String> {
-    write_article_file(app, article).map_err(|e| e.to_string())?;
-    let conn =
+    insert_article_in_folder(app, article, None)
+}
+
+pub fn insert_article_in_folder(
+    app: &AppHandle,
+    article: &Article,
+    folder_id: Option<&str>,
+) -> Result<(), String> {
+    let mut conn =
         rusqlite::Connection::open(crate::db::get_db_path(app)).map_err(|e| e.to_string())?;
-    conn.execute(
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    crate::notebook::validate_folder(&tx, folder_id)?;
+    if folder_id.is_some() && !matches!(article.article_type.as_str(), "manual" | "journal") {
+        return Err("只有笔记可以放入笔记文件夹".into());
+    }
+    write_article_file(app, article).map_err(|e| e.to_string())?;
+    tx.execute(
         "INSERT OR REPLACE INTO articles (id, item_id, title, content, article_type, edited, created_at, prompt_version, blocks_json)
          VALUES (?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
@@ -221,6 +236,10 @@ pub fn insert_article(app: &AppHandle, article: &Article) -> Result<(), String> 
         ],
     )
     .map_err(|e| e.to_string())?;
+    if folder_id.is_some() {
+        crate::notebook::assign_note(&tx, &article.id, folder_id)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 

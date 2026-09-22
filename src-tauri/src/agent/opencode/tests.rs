@@ -42,7 +42,11 @@ fn stream(tool: Option<Value>, text: &str) -> String {
         json!({"role":"assistant","content":text})
     };
     let chunk = |delta: Value, reason: Value| {
-        json!({"id":"fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":delta,"finish_reason":reason}]}).to_string()
+        let mut frame = json!({"id":"fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":delta,"finish_reason":reason}]});
+        if !reason.is_null() {
+            frame["usage"] = json!({"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":10},"completion_tokens_details":{"reasoning_tokens":5}});
+        }
+        frame.to_string()
     };
     format!(
         "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
@@ -114,7 +118,7 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join(format!("opencode-native-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::fs::create_dir_all(root.join("opencode/sessions/fixture")).unwrap();
     let root = root.canonicalize().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -146,7 +150,7 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
         thread_id: "opencode-fixture".into(),
         run_id: format!("opencode-{}", uuid::Uuid::new_v4()),
     };
-    let home = root.join("home");
+    let home = root.join("opencode/sessions/fixture");
     let mut prepared = Prepared {
         runtime: ExecutionRuntime::OpenCode(runtime),
         provider: crate::model::openai_compat::ProviderSnapshot {
@@ -213,6 +217,21 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
     .unwrap()
     .unwrap();
     assert_eq!(second.0, "history complete");
+    let usage = serde_json::to_value(crate::agent::usage::native_source(
+        &root,
+        "opencode",
+        7,
+        chrono::Utc::now().timestamp_millis(),
+    ))
+    .unwrap();
+    assert!(usage["error"].is_null(), "{usage}");
+    assert_eq!(usage["summary"]["apiCalls"], 4, "{usage}");
+    assert_eq!(usage["summary"]["sessions"], 1);
+    assert_eq!(usage["summary"]["totalTokens"], 480);
+    assert_eq!(usage["summary"]["cacheReadTokens"], 40);
+    assert_eq!(usage["summary"]["outputTokens"], 80);
+    assert_eq!(usage["summary"]["reasoningTokens"], 20);
+    assert_eq!(usage["byModel"][0]["model"], "fixture-model");
     prepared.scope.mode = "plan".into();
     prepared.prompt = "Try writing another file".into();
     let third = tokio::time::timeout(

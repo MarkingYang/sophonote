@@ -11,7 +11,17 @@ use tauri::{AppHandle, Emitter};
 
 pub(crate) static CLAUDE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PI_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-static PROGRESS: Mutex<[Option<UpdateProgress>; 2]> = Mutex::new([None, None]);
+static OPENCODE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static PROGRESS: Mutex<[Option<UpdateProgress>; 3]> = Mutex::new([None, None, None]);
+
+fn progress_index(engine: &str) -> Option<usize> {
+    match engine {
+        "pi" => Some(0),
+        "claude_code" => Some(1),
+        "opencode" => Some(2),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +61,8 @@ pub(crate) fn report(
         bytes_downloaded: bytes,
         total_bytes: total,
     };
-    if let Ok(mut entries) = PROGRESS.lock() {
-        entries[usize::from(engine == "claude_code")] = Some(value.clone());
+    if let (Ok(mut entries), Some(index)) = (PROGRESS.lock(), progress_index(engine)) {
+        entries[index] = Some(value.clone());
     }
     let _ = app.emit("sophonote:agent-update-progress", value);
 }
@@ -60,7 +70,7 @@ fn progress(engine: &str) -> Option<UpdateProgress> {
     PROGRESS
         .lock()
         .ok()
-        .and_then(|p| p[usize::from(engine == "claude_code")].clone())
+        .and_then(|p| progress_index(engine).and_then(|index| p[index].clone()))
 }
 
 #[derive(Debug, PartialEq)]
@@ -128,6 +138,41 @@ async fn status(app: &AppHandle, engine: &str, check: bool) -> Result<UpdateStat
             };
             let latest = if check {
                 Some(super::pi::update::latest().await?.version)
+            } else {
+                None
+            };
+            Ok(UpdateStatus {
+                engine: engine.into(),
+                current_version: version,
+                latest_version: latest,
+                source: source.into(),
+                can_update: true,
+                message,
+                progress: progress(engine),
+            })
+        }
+        "opencode" => {
+            let handle = app.clone();
+            let resolved =
+                tokio::task::spawn_blocking(move || super::opencode::update::resolve(&handle))
+                    .await
+                    .map_err(|_| "OpenCode 状态校验失败")?;
+            let (version, message, source) = match resolved {
+                Ok((runtime, warning)) => {
+                    let source = if runtime
+                        .executable
+                        .starts_with(super::opencode::update::root(app)?)
+                    {
+                        "应用私有更新槽"
+                    } else {
+                        "随 SophoNote 分发"
+                    };
+                    (Some(runtime.version), warning, source)
+                }
+                Err(error) => (None, Some(error), "运行时未就绪"),
+            };
+            let latest = if check {
+                Some(super::opencode::update::latest().await?.version)
             } else {
                 None
             };
@@ -344,6 +389,10 @@ pub async fn agent_runtime_update(app: AppHandle, engine: String) -> ApiResponse
             Ok(_guard) => super::pi::update::pull(&app).await,
             Err(_) => return ApiResponse::err("Pi 更新已在进行中".into()),
         },
+        "opencode" => match OPENCODE_GATE.try_lock() {
+            Ok(_guard) => super::opencode::update::pull(&app).await,
+            Err(_) => return ApiResponse::err("OpenCode 更新已在进行中".into()),
+        },
         "claude_code" => match CLAUDE_GATE.try_lock() {
             Ok(_guard) => update_claude(&app).await,
             Err(_) => return ApiResponse::err("Claude Code 正在启动或更新，请稍后重试".into()),
@@ -351,7 +400,7 @@ pub async fn agent_runtime_update(app: AppHandle, engine: String) -> ApiResponse
         _ => Err("未知 Agent 更新类型".into()),
     };
     if let Err(error) = result {
-        if matches!(engine.as_str(), "pi" | "claude_code") {
+        if matches!(engine.as_str(), "pi" | "claude_code" | "opencode") {
             report(&app, &engine, "failed", "failed", &error, None, None);
         }
         return ApiResponse::err(error);
