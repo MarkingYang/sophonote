@@ -353,10 +353,9 @@ describe('AG-23 loadThreads 与派生函数', () => {
     useAgentStore.setState({ threads: [threadRow], loading: false });
     let release: (value: unknown) => void = () => {};
     invokeMock.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }) as never,
+      (command) => command === 'light_response_list'
+        ? Promise.resolve({ success: true, data: [], error: null }) as never
+        : new Promise((resolve) => { release = resolve; }) as never,
     );
     const pending = useAgentStore.getState().loadThreads('p1');
     expect(useAgentStore.getState().loading).toBe(false);

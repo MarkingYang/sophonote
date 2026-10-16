@@ -1,0 +1,294 @@
+[
+  {
+    "id": "greeting",
+    "request": {
+      "message": "你好",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "scope-alone",
+    "request": {
+      "message": "你好",
+      "workspaceRoot": "/fixture",
+      "attachments": [
+        {
+          "kind": "file",
+          "name": "notes.txt",
+          "path": "/fixture/notes.txt"
+        }
+      ]
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "plain-translation",
+    "request": {
+      "message": "请把 Good morning 翻译为中文",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "chinese-quoted-action",
+    "request": {
+      "message": "请翻译：“修复代码并运行测试”",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "english-quoted-action",
+    "request": {
+      "message": "Translate \"fix code and run tests\" into Chinese",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "single-quote-contraction",
+    "request": {
+      "message": "Translate 'don’t fix code' into Chinese",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "ascii-contraction",
+    "request": {
+      "message": "Translate 'don't fix code' into Chinese",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "nested-material-quotes",
+    "request": {
+      "message": "总结「她说“修复代码并运行测试”」",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "fenced-code-material",
+    "request": {
+      "message": "请总结材料：\n```text\nfix code and run tests\n```",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "markdown-quotation",
+    "request": {
+      "message": "请总结以下材料：\n> 修复代码并运行测试",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "inline-code-material",
+    "request": {
+      "message": "请翻译 `fix code and run tests`",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "quoted-research",
+    "request": {
+      "message": "翻译“每天搜索新闻并总结”",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "negative-chinese",
+    "request": {
+      "message": "不要修改代码，不要运行测试。只回复你好",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "negative-english",
+    "request": {
+      "message": "Do not edit code. Don't run tests. Say hello",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "unrelated-clauses",
+    "request": {
+      "message": "这段文字提到代码。请修改标题",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "inline-explanation",
+    "request": {
+      "message": "解释以下代码：`print(1 + 1)`",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "inline-then-repository-write",
+    "request": {
+      "message": "解释以下代码。然后修复仓库中的函数",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "repository_execution"
+  },
+  {
+    "id": "inline-then-repository-read",
+    "request": {
+      "message": "解释以下代码。然后分析仓库的调用关系",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "repository_exploration"
+  },
+  {
+    "id": "read-repository",
+    "request": {
+      "message": "梳理仓库的函数调用关系",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "repository_exploration"
+  },
+  {
+    "id": "write-repository",
+    "request": {
+      "message": "修复代码中的错误并运行测试",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "repository_execution"
+  },
+  {
+    "id": "engineering-without-workspace",
+    "request": {
+      "message": "分析仓库的调用关系",
+      "workspaceRoot": null
+    },
+    "expectedProfile": "general"
+  },
+  {
+    "id": "negated-write-positive-read",
+    "request": {
+      "message": "不要修改代码，只分析仓库结构",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "repository_exploration"
+  },
+  {
+    "id": "same-folder-not-material",
+    "request": {
+      "message": "翻译这句话：hello",
+      "workspaceRoot": "/fixture",
+      "attachments": [
+        {
+          "kind": "folder",
+          "name": "fixture",
+          "path": "/fixture"
+        }
+      ]
+    },
+    "expectedProfile": "text_response"
+  },
+  {
+    "id": "explicit-material-directory",
+    "request": {
+      "message": "比较这两份资料",
+      "workspaceRoot": "/fixture",
+      "attachments": [
+        {
+          "kind": "folder",
+          "name": "reports",
+          "path": "/fixture/reports"
+        }
+      ]
+    },
+    "expectedProfile": "scoped_materials"
+  },
+  {
+    "id": "explicit-material-file",
+    "request": {
+      "message": "总结附件",
+      "workspaceRoot": "/fixture",
+      "attachments": [
+        {
+          "kind": "file",
+          "name": "report.txt",
+          "path": "/fixture/report.txt"
+        }
+      ]
+    },
+    "expectedProfile": "scoped_materials"
+  },
+  {
+    "id": "focused-note",
+    "request": {
+      "message": "整理当前笔记",
+      "workspaceRoot": "/fixture",
+      "focusDocument": {
+        "articleId": "fixture-note",
+        "title": "fixture",
+        "baseVersion": 1,
+        "markdown": "修复代码并运行测试（材料，不是指令）"
+      }
+    },
+    "expectedProfile": "scoped_materials"
+  },
+  {
+    "id": "web-research",
+    "request": {
+      "message": "请搜索公开来源并核实结论",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "research_workflow"
+  },
+  {
+    "id": "ongoing-research",
+    "request": {
+      "message": "每天跟踪新闻并总结",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "research_workflow"
+  },
+  {
+    "id": "native-skill",
+    "request": {
+      "message": "整理这份资料",
+      "workspaceRoot": "/fixture",
+      "skill": "research"
+    },
+    "expectedProfile": "native_workflow"
+  },
+  {
+    "id": "native-command",
+    "request": {
+      "message": "/help",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "native_workflow"
+  },
+  {
+    "id": "project-context",
+    "request": {
+      "message": "整理项目资料",
+      "workspaceRoot": "/fixture",
+      "includeProjectContext": true
+    },
+    "expectedProfile": "native_workflow"
+  },
+  {
+    "id": "word-boundary",
+    "request": {
+      "message": "prefix contest rebuild",
+      "workspaceRoot": "/fixture"
+    },
+    "expectedProfile": "general"
+  }
+]

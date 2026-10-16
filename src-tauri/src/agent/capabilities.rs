@@ -43,6 +43,19 @@ fn host_snapshot(engine: &str, status: Value) -> EngineCapabilities {
     }
 }
 
+/// Host policy eligibility only; each tool still validates its concrete target and approval.
+/// Hermes native tools are deliberately not inferred from this bridge catalogue.
+pub(crate) fn prepared_host_tools(permission_mode: &str) -> Vec<String> {
+    super::claude::tools_server::definitions()
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .filter(|name| permission_mode != "plan" || !matches!(*name, "write" | "edit" | "bash"))
+        .map(str::to_owned)
+        .collect()
+}
+
 #[tauri::command]
 pub async fn agent_capabilities(app: AppHandle, engine: String) -> ApiResponse<EngineCapabilities> {
     match tokio::time::timeout(std::time::Duration::from_secs(25), load(app, engine)).await {
@@ -89,6 +102,23 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn plan_snapshot_excludes_writes_and_commands() {
+        let plan = prepared_host_tools("plan");
+        for name in ["write", "edit", "bash"] {
+            assert!(!plan.iter().any(|tool| tool == name));
+        }
+        for name in ["read", "ls", "webfetch", "websearch", "news_search"] {
+            assert!(plan.iter().any(|tool| tool == name));
+        }
+        let ask = prepared_host_tools("ask");
+        assert!(ask.iter().any(|tool| tool == "write"));
+        assert_eq!(
+            ask.iter().any(|tool| tool == "bash"),
+            cfg!(target_os = "macos")
+        );
+    }
+
+    #[test]
     fn host_bridge_does_not_claim_native_management_or_readiness() {
         for engine in ["pi", "claude_code", "opencode"] {
             let snapshot = host_snapshot(
@@ -105,7 +135,15 @@ mod tests {
                     .iter()
                     .map(|t| t.name.as_str())
                     .collect::<Vec<_>>(),
-                ["read", "ls", "write", "edit"]
+                [
+                    "read",
+                    "ls",
+                    "write",
+                    "edit",
+                    "websearch",
+                    "webfetch",
+                    "news_search"
+                ]
             );
             let serialized = serde_json::to_value(snapshot).unwrap();
             assert!(serialized.get("managedCategories").is_some());

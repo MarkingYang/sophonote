@@ -211,6 +211,7 @@ pub fn init_db(app: &AppHandle) -> Result<(), String> {
 /// 自 init_db 抽出，供单测内存库原样复用（不含默认数据播种）。
 pub fn create_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     crate::notebook::create_schema(conn)?;
+
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS sources (
@@ -767,6 +768,7 @@ fn create_agent_tables(conn: &rusqlite::Connection) -> Result<(), String> {
         conn,
         "agent_runs",
         &[
+            ("route_decision_json", "route_decision_json TEXT"),
             ("engine_transport", "engine_transport TEXT"),
             ("external_run_id", "external_run_id TEXT"),
             ("external_session_id", "external_session_id TEXT"),
@@ -777,6 +779,12 @@ fn create_agent_tables(conn: &rusqlite::Connection) -> Result<(), String> {
             ("last_external_event_id", "last_external_event_id TEXT"),
         ],
     )?;
+    crate::light_response::store::create_schema(conn).map_err(|e| e.to_string())?;
+    crate::agent::automatic::create_schema(conn).map_err(|e| e.to_string())?;
+    crate::agent::submission::create_schema(conn).map_err(|e| e.to_string())?;
+    crate::agent::submission::live::install_triggers(conn).map_err(|e| e.to_string())?;
+    crate::agent::orchestration::store::create_schema(conn).map_err(|e| e.to_string())?;
+    crate::agent::orchestration::sessions::create_schema(conn).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -908,6 +916,47 @@ pub fn delete_articles_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_audit_migration_is_additive_and_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        create_agent_tables(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO agent_threads(id,created_at,updated_at) VALUES('t',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,thread_id,created_at,updated_at) VALUES('r','t',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute("ALTER TABLE agent_runs DROP COLUMN route_decision_json", [])
+            .unwrap();
+        create_agent_tables(&conn).unwrap();
+        let old: Option<String> = conn
+            .query_row(
+                "SELECT route_decision_json FROM agent_runs WHERE id='r'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(old.is_none());
+        conn.execute(
+            "UPDATE agent_runs SET route_decision_json='fixture' WHERE id='r'",
+            [],
+        )
+        .unwrap();
+        create_agent_tables(&conn).unwrap();
+        let preserved: String = conn
+            .query_row(
+                "SELECT route_decision_json FROM agent_runs WHERE id='r'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, "fixture");
+    }
 
     #[test]
     fn legacy_threads_default_to_hermes_without_losing_session_binding() {

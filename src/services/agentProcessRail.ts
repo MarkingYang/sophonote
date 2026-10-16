@@ -65,7 +65,8 @@ export function runPhaseLabel(phase: RunPhase): string {
 function bareToolName(name: string): string {
   return name
     .replace(/^mcp(?:__|_)sophonote(?:-|_)bridge(?:__|_)+/i, '')
-    .replace(/^sophonote(?:-|_)bridge(?:__|_)+/i, '');
+    .replace(/^sophonote(?:-|_)bridge(?:__|_)+/i, '')
+    .replace(/^(?:mcp__sophonote__|sophonote_)(?=websearch$|webfetch$|news_search$)/i, '');
 }
 
 /** 面向用户的工具名（与 Chat 面板口径一致） */
@@ -94,8 +95,12 @@ export function toolDisplayName(name: string): string {
       return '计算';
     case 'weather':
       return '查询天气';
+    case 'websearch':
     case 'web_search':
       return '搜索网页';
+    case 'news_search':
+      return '查询新闻';
+    case 'webfetch':
     case 'web_extract':
       return '读取网页';
     case 'browser_navigate':
@@ -187,11 +192,11 @@ export function toolStepSummary(card: ToolCard): string | null {
         return flat.length > 36 ? `${flat.slice(0, 36)}…` : flat;
       }
       const bare = bareToolName(card.name);
-      if (bare === 'web_search') {
+      if (['web_search', 'websearch', 'news_search'].includes(bare)) {
         const query = typeof args.query === 'string' ? args.query.trim() : null;
         if (query && !looksLikeInternal(query)) return query.length > 36 ? `${query.slice(0, 36)}…` : query;
       }
-      if (bare === 'web_extract' || bare.startsWith('browser_')) {
+      if (bare === 'webfetch' || bare === 'web_extract' || bare.startsWith('browser_')) {
         const rawUrl = typeof args.url === 'string' ? args.url.trim() : null;
         if (rawUrl) {
           try {
@@ -322,6 +327,9 @@ const EXPLORE_TOOL_NAMES = new Set([
   'session_search_recall',
   'vision_analyze',
   'web_extract',
+  'websearch',
+  'webfetch',
+  'news_search',
   'web_search',
 ]);
 

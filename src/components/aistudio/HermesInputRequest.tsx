@@ -141,7 +141,13 @@ function DecisionOption({
 }
 
 /** 多引擎共用的阻塞式输入卡：回答直接回到同一 Session，不转换成下一轮用户消息。 */
-export function HermesInputRequest({
+export function HermesInputRequest(props: Parameters<typeof InputRequestBody>[0]) {
+  const payload = props.request.payload;
+  const id = payload.type === 'approval_required' ? payload.approvalId : payload.requestId;
+  return <InputRequestBody key={`${props.request.runId}:${payload.type}:${id}`} {...props} />;
+}
+
+function InputRequestBody({
   request,
   engineLabel,
   onApproval,
@@ -149,7 +155,7 @@ export function HermesInputRequest({
 }: {
   request: PendingHermesInput;
   engineLabel: string;
-  onApproval: (choice: string) => Promise<boolean>;
+  onApproval: (approvalId: string, choice: string) => Promise<boolean>;
   onClarify: (requestId: string, answer: string) => Promise<boolean>;
 }) {
   const titleId = useId();
@@ -189,7 +195,7 @@ export function HermesInputRequest({
     }
     setSubmitError(false);
     setSendingValue(choice);
-    const ok = await onApproval(choice);
+    const ok = await onApproval(payload.approvalId, choice);
     setSendingValue(null);
     if (ok) setResolved(true);
     else setSubmitError(true);

@@ -1,3 +1,7 @@
+import { invoke } from '@tauri-apps/api/core';
+import { WorkflowProgress } from './WorkflowProgress';
+import LightResponsePanel from './LightResponsePanel';
+import { isResponseConversation, startTextResponse } from '../../services/lightResponse';
 // ============================================================
 // Track B · 智能体演进（AG-15 · Phase 2 Chat · ProjectChatPanel）
 // 实施基线：docs/architecture.md 事件协议 + §六 RunStore
@@ -21,9 +25,9 @@ import {
   Globe2, Monitor,
 } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
-import { AgentEngineControl } from './AgentEngineControl';
+import { submissionScopeKey, canRestoreDraftAttachments, recoverableSubmission, readSubmissionDraft, type AutomaticSubmission } from '../../services/agentSubmission';
 import ProcessRail from './ProcessRail';
-import { useSidecarConfig } from './useSidecarConfig';
+import AnswerCopyButton from './AnswerCopyButton';
 import { ComputerUsePanel, COMPUTER_NOTE_SKILL } from './ComputerUsePanel';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { confirm as confirmDialog, open } from '@tauri-apps/plugin-dialog';
@@ -34,7 +38,6 @@ import {
   isPlaceholderThreadTitle,
   resolveProjectThreadId,
   useAgentStore,
-  type AgentEngine,
   type AgentMessage,
   type AgentThread,
   type RunContext,
@@ -87,7 +90,6 @@ import {
   hermesToolsetSetEnabled,
   hermesTerminalBackendSelect,
   type HermesSkillInfo,
-  type HermesModelOptions,
   type HermesCapabilities,
   type HermesHubPage,
   type HermesHubPreview,
@@ -104,10 +106,7 @@ import {
 } from '../../services/tauri';
 import {
   peekHermesCapabilities,
-  peekHermesModelOptions,
   rememberHermesCapabilities,
-  rememberHermesModelOptions,
-  resolveStoredHermesSelection,
 } from '../../services/hermesRuntimeCache';
 import MarkdownView from '../features/MarkdownView';
 import {
@@ -146,6 +145,8 @@ import {
 interface ProjectChatPanelProps {
   /** null = 全局快捷任务；string = 项目内任务。 */
   projectId?: string | null;
+  initialTaskText?: string;
+  forceAgent?: boolean;
   /** Change Session 的前端作用域；笔记本无 projectId，但仍需接收左侧文档 Patch。 */
   changeScopeId?: string | null;
   projectName?: string;
@@ -229,8 +230,35 @@ function blobAsDataUrl(blob: Blob): Promise<string> {
 }
 
 /** 项目 Chat 面板：用户输入 → 调用 Agent → 渲染事件流 */
-export default function ProjectChatPanel({
+export default function ProjectChatPanel(props: ProjectChatPanelProps) {
+  const selected = useAgentStore(s => s.selectedThreadId);
+  const threads = useAgentStore(s => s.threads);
+  const [handoff, setHandoff] = useState<{ project: string | null; text: string } | null>(null);
+  const [draftOverride, setDraftOverride] = useState(false);
+  useEffect(() => { setDraftOverride(false); setHandoff(null); }, [props.projectId]);
+  useEffect(() => { if (props.threadId) { setDraftOverride(false); setHandoff(null); } }, [props.threadId]);
+  const project = props.projectId ?? null;
+  const id = (props.draftSession || draftOverride) ? null : (props.threadId ?? selected);
+  const response = threads.find(t => t.id === id && t.projectId === project && isResponseConversation(t.id));
+  const newDraft = () => {
+    setDraftOverride(true);
+    useAgentStore.getState().selectThread(null);
+    props.onDraftSessionChange?.(true);
+  };
+  if (response) return <LightResponsePanel key={`${project}:${response.id}`} conversationId={response.id} projectId={project}
+    onNew={() => { setHandoff(null); newDraft(); }}
+    onUpgrade={text => { setHandoff({ project, text }); newDraft(); }} />;
+  const taskText = handoff?.project === project ? handoff.text : undefined;
+  return <AgentProjectChatPanel {...props} threadId={draftOverride ? null : props.threadId}
+    draftSession={draftOverride || props.draftSession} initialTaskText={taskText} forceAgent={!!taskText}
+    onThreadCreated={id => { setDraftOverride(false); setHandoff(null); props.onThreadCreated?.(id); }}
+    onDraftSessionChange={draft => { setDraftOverride(draft); props.onDraftSessionChange?.(draft); }} />;
+}
+
+function AgentProjectChatPanel({
   projectId,
+  initialTaskText,
+  forceAgent = false,
   changeScopeId: requestedChangeScopeId,
   projectName = '项目',
   threadId: propThreadId,
@@ -297,6 +325,15 @@ export default function ProjectChatPanel({
   const historyRestoredRef = useRef<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   // DEC-014：Composer 只保存本轮待发送选择；路径读取/预算校验在 Rust。
+  const [readOnlyCollaboration, setReadOnlyCollaboration] = useState(false);
+  const [collaborationPreview, setCollaborationPreview] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>('agent_workflow_preview_available').then((enabled) => {
+      if (active) setCollaborationPreview(enabled === true);
+    }).catch(() => { if (active) setCollaborationPreview(false); });
+    return () => { active = false; };
+  }, []);
   const [attachments, setAttachments] = useState<AgentAttachmentInput[]>([]);
   const [surfaceTab, setSurfaceTab] = useState<'chat' | 'browser'>('chat');
   const [browserConnected, setBrowserConnected] = useState(
@@ -318,13 +355,11 @@ export default function ProjectChatPanel({
   const [dropActive, setDropActive] = useState(false);
   const nativeDropAtRef = useRef(0);
   const chatPanelRef = useRef<HTMLElement | null>(null);
-  const [hermesModels, setHermesModels] = useState<HermesModelOptions | null>(() => peekHermesModelOptions());
-  const [hermesModelError, setHermesModelError] = useState<string | null>(null);
   const [selectedHermesProvider, setSelectedHermesProvider] = useState(
-    () => resolveStoredHermesSelection(peekHermesModelOptions()).provider,
+    () => window.localStorage.getItem('sophonote.hermes.provider') ?? '',
   );
   const [selectedHermesModel, setSelectedHermesModel] = useState(
-    () => resolveStoredHermesSelection(peekHermesModelOptions()).model,
+    () => window.localStorage.getItem('sophonote.hermes.model') ?? '',
   );
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const timelineViewportRef = useRef<HTMLDivElement>(null);
@@ -391,7 +426,7 @@ export default function ProjectChatPanel({
     }
     const sameProject = previousProjectRef.current === projectId;
     previousProjectRef.current = projectId;
-    // 引擎选择器发起的本地新任务已经清理范围；保留刚恢复的输入与附件。
+    // 同项目本地草稿继续保留输入与附件。
     if (sameProject && localDraftSession && propThreadId == null) return;
     setActiveThreadId(propThreadId ?? null);
     setLocalDraftSession(false);
@@ -409,58 +444,6 @@ export default function ProjectChatPanel({
     setAttachments((previous) => previous.some((item) => item.path === fileContextRequest.attachment.path)
       ? previous : [...previous, fileContextRequest.attachment]);
   }, [fileContextRequest]);
-
-  // 三种引擎共用 Host 模型配置及同一选择偏好；Hermes 的目录仍由 Runtime 投影。
-  const refreshHermesModels = useCallback(() => {
-    let cancelled = false;
-    setHermesModelError(null);
-    tauri.hermesModelOptions()
-      .then((options) => {
-        rememberHermesModelOptions(options);
-        if (cancelled) return;
-        setHermesModels((prev) => (
-          prev && JSON.stringify(prev) === JSON.stringify(options) ? prev : options
-        ));
-        const selection = resolveStoredHermesSelection(options);
-        setSelectedHermesProvider((prev) => (prev === selection.provider ? prev : selection.provider));
-        setSelectedHermesModel((prev) => (prev === selection.model ? prev : selection.model));
-        if (selection.provider && selection.model) {
-          window.localStorage.setItem('sophonote.hermes.provider', selection.provider);
-          window.localStorage.setItem('sophonote.hermes.model', selection.model);
-        } else {
-          window.localStorage.removeItem('sophonote.hermes.provider');
-          window.localStorage.removeItem('sophonote.hermes.model');
-        }
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        if (peekHermesModelOptions()) return;
-        setHermesModels(null);
-        setSelectedHermesProvider('');
-        setSelectedHermesModel('');
-        setHermesModelError(error instanceof Error ? error.message : String(error));
-      });
-    return () => { cancelled = true; };
-  }, []);
-  useEffect(() => {
-    if (peekHermesModelOptions()) return;
-    return refreshHermesModels();
-  }, [refreshHermesModels]);
-  useEffect(() => subscribeTauriListener(
-    tauri.listenHermesStatusChanged((status) => {
-      if (status === 'connected') refreshHermesModels();
-    }),
-  ), [refreshHermesModels]);
-
-  const rememberHermesModel = useCallback((provider: string, model: string) => {
-    const row = hermesModels?.providers.find((item) => item.slug === provider);
-    if (row?.authenticated !== true || !row.models.includes(model)) return;
-    setSelectedHermesProvider(provider);
-    setSelectedHermesModel(model);
-    setModelMenuOpen(false);
-    window.localStorage.setItem('sophonote.hermes.provider', provider);
-    window.localStorage.setItem('sophonote.hermes.model', model);
-  }, [hermesModels]);
 
   // AG-17 窗口重挂载恢复：绑定项目下第一个有内容的活跃 Thread
   useEffect(() => {
@@ -489,20 +472,99 @@ export default function ProjectChatPanel({
         explicitThreadId ?? selectedThreadId
       );
   const currentThread = threads.find((thread) => thread.id === currentThreadId);
-  const [draftEngine, setDraftEngine] = useState<AgentEngine>('hermes');
-  const engineLocked = currentThread?.latestRunId != null;
-  const engine = engineLocked ? currentThread?.engine ?? 'hermes' : draftEngine;
+  const engine = currentThread?.engine ?? 'hermes';
   const isSidecar = engine !== 'hermes';
   const engineLabel = engine === 'opencode' ? 'OpenCode' : engine === 'claude_code' ? 'Claude Code' : engine === 'pi' ? 'Pi' : 'Hermes';
   const modelConfig = useAppStore((state) => state.settings.aiConfig);
-  const { models: sidecarModels, status: sidecarStatus, error: sidecarError,
-    selection: sidecarSelection, setSelection: setSidecarSelection, refresh: setSidecarRefresh,
-    modelsLoading: sidecarModelsLoading, runtimeLoading: sidecarRuntimeLoading,
-  } = useSidecarConfig(engine, modelConfig);
+  const configuredProviders = useMemo(() => Object.entries(modelConfig?.providers ?? {}).filter(([, p]) => p.baseUrl?.trim() && p.model?.trim()).map(([slug, p]) => ({ slug, name: slug, authenticated: true, isCurrent: slug === modelConfig?.activeProvider, models: [...new Set([p.model, ...(p.models ?? [])])].filter(Boolean) })), [modelConfig]);
+  const displayProvider = configuredProviders.some((p) => p.slug === selectedHermesProvider) ? selectedHermesProvider : modelConfig?.activeProvider ?? '';
+  const providerModels = configuredProviders.find((p) => p.slug === displayProvider)?.models ?? [];
+  const displayModel = providerModels.includes(selectedHermesModel) ? selectedHermesModel : providerModels[0] ?? '';
+  const displayModelError = displayModel ? null : '请在设置中配置模型';
   useEffect(() => { if (isSidecar) { setSurfaceTab('chat'); setActiveSkill(null); setComputerPanelOpen(false); setSessionSurface(null); } }, [isSidecar]);
-  const displayProvider = isSidecar ? sidecarSelection.provider : selectedHermesProvider;
-  const displayModel = isSidecar ? sidecarSelection.model : selectedHermesModel;
-  const displayModelError = isSidecar ? sidecarError : hermesModelError;
+  const submissionKey = submissionScopeKey(currentThreadId, projectId, activeDocumentId ?? selection?.articleId);
+  const submissionRecord = useAgentStore((state) => state.pendingSubmissions[submissionKey]);
+  const draftAvailable = recoverableSubmission(submissionRecord);
+  const pendingSubmission = draftAvailable ? undefined : submissionRecord;
+  const [restoredDraft, setRestoredDraft] = useState<{ key: string; request: AutomaticSubmission['request'] } | null>(null);
+  const restoredRequest = restoredDraft?.key === submissionKey ? restoredDraft.request : null;
+  const [restoringDraft, setRestoringDraft] = useState(false);
+  const liveSubmissionKey = useRef(submissionKey);
+  liveSubmissionKey.current = submissionKey;
+  const restoreInputs = useRef({ workspaceRoot, effectivePermissionMode, attachments, modelConfig });
+  restoreInputs.current = { workspaceRoot, effectivePermissionMode, attachments, modelConfig };
+  const restoreSubmittedDraft = async (discard = false) => {
+    if (!submissionRecord || restoringDraft) return;
+    const requestId = submissionRecord.clientRequestId;
+    const originalInputs = restoreInputs.current;
+    setRestoringDraft(true);
+    try {
+      const draft = await readSubmissionDraft(requestId, discard);
+      if (liveSubmissionKey.current !== submissionKey || useAgentStore.getState().pendingSubmissions[submissionKey]?.clientRequestId !== requestId) return;
+      if (discard) {
+        useAgentStore.getState().setSubmission(submissionKey, null);
+        // Discard only the saved copy; never erase newly edited Composer content.
+        return;
+      }
+      if (!draft) { setComposerError('这条旧提交没有可恢复的草稿内容'); return; }
+      const latestInputs = restoreInputs.current;
+      if (Object.keys(originalInputs).some((key) => originalInputs[key as keyof typeof originalInputs] !== latestInputs[key as keyof typeof latestInputs])) {
+        setComposerError('恢复期间输入范围或配置已变化，请重新恢复'); return;
+      }
+      if (!canRestoreDraftAttachments(attachments, draft.attachments)) {
+        setComposerError('已有新添加的附件，请先处理当前附件后恢复草稿'); return;
+      }
+      if ((draft.threadId ?? null) !== currentThreadId || (draft.projectId ?? null) !== (projectId ?? null) || (draft.workspaceRoot ?? null) !== (workspaceRoot ?? null)) {
+        setComposerError('草稿所属会话或目录已变化，请回到原范围后恢复'); return;
+      }
+      if ((draft.workspacePermissionMode ?? 'ask') !== effectivePermissionMode) {
+        setComposerError(`请先切回草稿原权限模式（${draft.workspacePermissionMode === 'plan' ? '计划模式' : draft.workspacePermissionMode === 'autoEdit' ? '自动编辑' : '询问模式'}）后恢复`); return;
+      }
+      if (composerDraftRef.current.trim() && composerDraftRef.current.trim() !== draft.message.trim()) {
+        setComposerError('输入框已有新的内容，请先保存或清空后恢复草稿'); return;
+      }
+      const provider = modelConfig?.providers[draft.hermesProvider ?? ''];
+      if (!provider || ![provider.model, ...(provider.models ?? [])].includes(draft.hermesModel ?? '')) {
+        setComposerError('草稿原模型已不可用，请先在设置中恢复模型配置'); return;
+      }
+      setRestoredDraft({ key: submissionKey, request: draft });
+      setComposerPrefill({ nonce: Date.now(), text: draft.message });
+      setAttachments((draft.attachments ?? []).filter((a) => !(a.kind === 'folder' && a.path === workspaceRoot)).map((a) => ({ ...a, id: attachmentId() })));
+      setSelectedHermesProvider(draft.hermesProvider ?? ''); setSelectedHermesModel(draft.hermesModel ?? '');
+      setActiveSkill(draft.skill ?? null);
+      setComposerError(null);
+    } catch (error) { if (liveSubmissionKey.current === submissionKey) setComposerError(String(error)); }
+    finally { setRestoringDraft(false); }
+  };
+  useEffect(() => {
+    setRestoredDraft(null);
+    // Initialize scope and explicit handoff together: a later reset effect must
+    // not erase the excerpt in the same commit that creates the task draft.
+    setComposerPrefill(initialTaskText ? { nonce: Date.now(), text: initialTaskText } : null);
+  }, [submissionKey, initialTaskText]);
+  const cancelPendingSubmission = useAgentStore((state) => state.cancelSubmission);
+  const recoverPendingSubmission = useAgentStore((state) => state.recoverSubmission);
+  const monitoringSubmission = useAgentStore((state) => state.submissionMonitors[submissionKey] ?? false);
+  const recoverPending = async () => {
+    const result = await recoverPendingSubmission(submissionKey);
+    if (result) {
+      setLocalDraftSession(false); onDraftSessionChange?.(false);
+      setActiveThreadId(result.threadId); selectThread(result.threadId); onThreadCreated?.(result.threadId);
+      void loadThreads(projectId ?? undefined, 'active');
+    } else setComposerError(useAgentStore.getState().lastStartError);
+  };
+  useEffect(() => {
+    // Reopening a view queries the persisted identity; it never repeats start.
+    if (!useAgentStore.getState().pendingSubmissions[submissionKey] || useAgentStore.getState().submissionMonitors[submissionKey]) return;
+    let disposed = false;
+    void recoverPendingSubmission(submissionKey).then((result) => {
+      if (disposed || !result) return;
+      setLocalDraftSession(false); onDraftSessionChange?.(false);
+      setActiveThreadId(result.threadId); selectThread(result.threadId); onThreadCreated?.(result.threadId);
+      void loadThreads(projectId ?? undefined, 'active');
+    });
+    return () => { disposed = true; };
+  }, [submissionKey]);
   const messages = useSurfaceAgentStore((state) =>
     currentThreadId ? state.messagesByThreadId[currentThreadId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES
   );
@@ -598,7 +660,13 @@ export default function ProjectChatPanel({
     ? (historyLoadingByThreadId[currentThreadId] ?? 0) > 0
     : false;
   const resumingRunId = currentThreadId ? resumingRunByThreadId[currentThreadId] : undefined;
-  const conversationLocked = historyLoading || runningRunId != null || resumingRunId != null;
+  const workflowRunId = runningRunId ?? currentThread?.latestRunId;
+  const workflow = useSurfaceAgentStore((state) => workflowRunId ? state.workflowsByRun[workflowRunId] : undefined);
+  const workflowLocked = workflow?.locked ?? false;
+  const conversationLocked = historyLoading || runningRunId != null || resumingRunId != null || pendingSubmission != null || workflowLocked;
+
+  useEffect(() => { setReadOnlyCollaboration(false); }, [currentThreadId, scopedProjectId, effectivePermissionMode]);
+
   const findItems = useMemo(
     () => timeline.map((item) => ({
       key: item.key,
@@ -1075,20 +1143,28 @@ export default function ProjectChatPanel({
     } finally { savingAnswerRef.current = false; setSavingAnswer(false); }
   }, [activeDocumentId, changeScopeId, conversationLocked, resolveActiveDocumentContext, adoptProposal]);
 
+  const collaborationEligible = effectivePermissionMode === 'plan' && attachments.length > 0
+    && attachments.every((item) => item.kind === 'file') && !selection && !continuationContext
+    && !activeDocumentId && !includeProjectContext && !activeSkill;
   // 发送消息
   const handleSend = async (text: string) => {
     if ((!text.trim() && attachments.length === 0) || conversationLocked) return false;
-    if (isSidecar && (sidecarModelsLoading || sidecarRuntimeLoading)) return false;
-    if (isSidecar && !sidecarStatus?.available) { setComposerError(sidecarError ?? `${engineLabel} 运行时正在检查，请稍后重试`); return false; }
+    if (restoredRequest && ((restoredRequest.workspaceRoot ?? null) !== (workspaceRoot ?? null) || (restoredRequest.workspacePermissionMode ?? 'ask') !== effectivePermissionMode)) {
+      setComposerError('恢复后的目录或权限模式已变化，请回到原范围后发送'); return false;
+    }
+    if (readOnlyCollaboration && !collaborationEligible) {
+      setComposerError("只读协作需要计划模式和文本文件附件，请检查本轮范围"); return false;
+    }
     if (!displayProvider || !displayModel) {
-      setComposerError(sidecarError ?? (engine === 'claude_code' ? '未找到兼容模型，请在「设置 → AI 模型」配置官方 DeepSeek 或 Anthropic 协议供应商。' : '当前没有已配置的模型，请到「设置 → AI 模型」完成配置。'));
+      setComposerError('当前没有已配置的模型，请到「设置 → AI 模型」完成配置。');
       return false;
     }
     // Skill 名只作为 Hermes 原生命令引用透传；发送后保留供多轮复用。
-    let focusDocument: FocusDocumentInput | null = null;
+    const sendSelection = selection ?? restoredRequest?.selection ?? continuationContext;
+    let focusDocument: FocusDocumentInput | null = restoredRequest?.focusDocument ?? null;
     // 显式选区/变更续接优先，绝不把范围静默扩大到整篇。没有选区时，界面
     // 可见的当前文档 chip 才解析发送时草稿并交给 Hermes 原生 file.attach。
-    if (activeDocumentId && !includeProjectContext && !(selection ?? continuationContext)) {
+    if (!focusDocument && activeDocumentId && !includeProjectContext && !sendSelection) {
       try {
         focusDocument = await resolveActiveDocumentContext?.() ?? null;
         if (!focusDocument || focusDocument.articleId !== activeDocumentId) {
@@ -1117,24 +1193,42 @@ export default function ProjectChatPanel({
           ...attachments.filter((attachment) => !(attachment.kind === 'folder' && attachment.path === workspaceRoot)),
         ]
       : attachments;
+    if (!forceAgent && !currentThreadId && !sendSelection && !focusDocument && !activeDocumentId && !activeSkill
+      && !hermesCommand && !includeProjectContext && attachments.length === 0 && !restoredRequest) {
+      try {
+        const response = await startTextResponse({ message: text, projectId, workspaceRoot, hermesProvider: displayProvider, hermesModel: displayModel });
+        if (response) {
+          await loadThreads(projectId ?? undefined, 'active');
+          setLocalDraftSession(false); onDraftSessionChange?.(false);
+          selectThread(response.conversationId); onThreadCreated?.(response.conversationId);
+          setComposerError(null); return true;
+        }
+      } catch (error) {
+        setComposerError(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    }
     const result = await startRun(
       currentThreadId,
       text,
       projectId ?? undefined,
-      selection ?? continuationContext,
-      isSidecar || hermesCommand ? null : activeSkill ?? (focusDocument ? 'sophonote-note-persistence' : null),
+      sendSelection,
+      isSidecar || hermesCommand ? null : activeSkill,
       focusDocument,
       runAttachments,
       displayModel,
       displayProvider,
       hermesCommand,
-      includeProjectContext,
+      restoredRequest?.includeProjectContext ?? includeProjectContext,
       workspaceRoot,
       effectivePermissionMode,
-      engine,
+      undefined,
+      true,
+      readOnlyCollaboration,
     );
     if (!result) setComposerError(useAgentStore.getState().lastStartError ?? '消息未发送，请检查当前运行状态');
     if (result) {
+      setReadOnlyCollaboration(false);
       // 新 Thread 创建后切换到该 Thread
       setLocalDraftSession(false);
       onDraftSessionChange?.(false);
@@ -1145,6 +1239,7 @@ export default function ProjectChatPanel({
       // chip 已随本次 Run 消费（上下文进入 run_started 事件，消息头可回溯）
       onClearSelection?.();
       setAttachments([]);
+      setRestoredDraft(null);
       setComposerError(null);
       return true;
     }
@@ -1193,31 +1288,6 @@ export default function ProjectChatPanel({
     } finally {
       creatingThreadRef.current = false;
       setCreatingThread(false);
-    }
-  };
-
-  const selectEngine = async (nextEngine: AgentEngine): Promise<boolean> => {
-    if (nextEngine === engine) return true;
-    const draft = composerDraftRef.current;
-    const draftAttachments = attachments;
-    try {
-      if (engineLocked || conversationLocked) {
-        const created = await handleNewSession();
-        setAttachments(draftAttachments);
-        setComposerPrefill({ nonce: Date.now(), text: draft });
-        if (!created) {
-          setComposerError('新建任务失败，仍保留原引擎，请重试。');
-          return false;
-        }
-      }
-      setDraftEngine(nextEngine);
-      setComposerError(null);
-      setModelMenuOpen(false);
-      setAttachmentMenuOpen(false);
-      return true;
-    } catch (error) {
-      setComposerError(`切换引擎失败：${String(error)}`);
-      return false;
     }
   };
 
@@ -1272,7 +1342,9 @@ export default function ProjectChatPanel({
     if (name === '/new') { void handleNewSession(); return true; }
     if (name === '/model' || name === '/models') { setModelMenuOpen(true); return true; }
     if (name === '/stop') {
-      if (runningRunId) void cancelRun(runningRunId);
+      if (pendingSubmission) void cancelPendingSubmission(submissionKey);
+      else if (runningRunId) void cancelRun(runningRunId);
+              else if (workflowLocked && workflowRunId) void cancelRun(workflowRunId);
       return true;
     }
     const control = isSessionControlCommand(command);
@@ -1286,7 +1358,7 @@ export default function ProjectChatPanel({
       return true;
     }
     return false;
-  }, [cancelRun, handleNewSession, runningRunId, runHermesUndo, toggleSessionYolo, isSidecar]);
+  }, [cancelRun, cancelPendingSubmission, submissionKey, pendingSubmission, handleNewSession, runningRunId, workflowLocked, workflowRunId, runHermesUndo, toggleSessionYolo, isSidecar]);
 
   const handleComposerReference = useCallback((reference: string): string => {
     if (reference === '@file:') { void pickLocalAttachments('file'); return ''; }
@@ -1528,26 +1600,29 @@ export default function ProjectChatPanel({
             icon={MessageSquareText}
             title={emptyHint ?? (hasProjectScope
               ? '以当前本地项目为工作范围，用自然语言完成代码与文档任务。'
-              : `直接向 ${engineLabel} Agent 描述任务，过程与结果会保留在当前任务中。`)}
+              : '直接描述任务，系统会自动安排，过程与结果保留在当前任务中。')}
           />
         ) : (
           <ChatTimeline
             items={visibleTimeline}
             toolCardsByRunId={toolCardsByRunId}
             eventsByRunId={eventsByRunId}
-            running={runningRunId != null}
+            running={runningRunId != null || pendingSubmission != null || workflowLocked}
             highlightKey={findMatchKey}
             onSaveAnswer={activeDocumentId && !selection && !continuationContext ? saveAnswerToNote : undefined}
             saveDisabled={conversationLocked || savingAnswer}
           />
         )}
+        {workflowRunId && currentThreadId && <div className="mt-4">
+          <WorkflowProgress key={`workflow:${workflowRunId}`} runId={workflowRunId} threadId={currentThreadId} />
+        </div>}
         </div>
       </div>
       {showJumpToLatest && (
         <button
           type="button"
           onClick={jumpToLatest}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 h-8 px-3 rounded-full border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-md)] text-xs text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent-border)] flex items-center gap-1.5 backdrop-blur"
+          className="sn-jump-latest"
           aria-label="回到最新消息"
         >
           <ArrowDown size={13} /> 回到最新
@@ -1569,7 +1644,7 @@ export default function ProjectChatPanel({
             enabled={hermesCapabilitySnapshot?.toolsets.some((toolset) => toolset.name === 'computer_use' && toolset.enabled) ?? false}
             supported={hermesCapabilitySnapshot?.toolsets.some((toolset) => toolset.name === 'computer_use') ?? null}
             locked={conversationLocked}
-            running={runningRunId != null}
+            running={runningRunId != null || pendingSubmission != null || workflowLocked}
             hasSession={currentThreadId != null}
             hasNote={Boolean(activeDocumentId || selection)}
             skillAvailable={hermesSkills.some((skill) => skill.name === COMPUTER_NOTE_SKILL)}
@@ -1593,7 +1668,7 @@ export default function ProjectChatPanel({
           <HermesInputRequest
             request={pendingHermesInput}
             engineLabel={engineLabel}
-            onApproval={(choice) => respondApproval(pendingHermesInput.runId, choice)}
+            onApproval={(approvalId, choice) => respondApproval(pendingHermesInput.runId, approvalId, choice)}
             onClarify={(requestId, answer) =>
               respondClarify(pendingHermesInput.runId, requestId, answer)
             }
@@ -1627,24 +1702,39 @@ export default function ProjectChatPanel({
           )}
           {modelMenuOpen && (
             <AgentModelPicker
-              providers={(isSidecar ? sidecarModels : hermesModels)?.providers ?? []}
+              providers={configuredProviders}
               activeProvider={displayProvider}
               activeModel={displayModel}
               error={displayModelError}
               onPick={(provider, model) => {
-                if (isSidecar) {
-                  setSidecarSelection({ provider, model });
-                  setSelectedHermesProvider(provider); setSelectedHermesModel(model);
-                  window.localStorage.setItem('sophonote.hermes.provider', provider);
-                  window.localStorage.setItem('sophonote.hermes.model', model);
-                  setModelMenuOpen(false);
-                }
-                else rememberHermesModel(provider, model);
+                setSelectedHermesProvider(provider); setSelectedHermesModel(model);
+                window.localStorage.setItem('sophonote.hermes.provider', provider);
+                window.localStorage.setItem('sophonote.hermes.model', model);
+                setModelMenuOpen(false);
               }}
-              onRetry={() => { if (isSidecar) setSidecarRefresh((n) => n + 1); else refreshHermesModels(); }}
+              onRetry={() => void useAppStore.getState().loadSettings()}
               onClose={() => setModelMenuOpen(false)}
             />
           )}
+          {pendingSubmission && <div role="status" className="mb-2 flex items-center justify-between text-xs text-[var(--text-secondary)]">
+            <span>{pendingSubmission.error ?? (pendingSubmission.cancelRequested ? '正在确认停止…' : '正在安排任务…')}</span>
+            <button type="button" disabled={monitoringSubmission} onClick={() => void recoverPending()}>查询任务状态</button>
+          </div>}
+          {draftAvailable && <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+            <span>{restoredRequest ? '草稿已恢复，请核对范围后发送' : '有一条未发送成功的草稿'}</span>
+            {!restoredRequest && <button type="button" disabled={restoringDraft || conversationLocked} onClick={() => void restoreSubmittedDraft()}>恢复草稿</button>}
+            <button type="button" disabled={restoringDraft || conversationLocked} onClick={() => void restoreSubmittedDraft(true)}>丢弃保存的草稿</button>
+          </div>}
+          {restoredRequest && <div className="mb-2 text-xs text-[var(--text-secondary)]">
+            {restoredRequest.selection ? `原选区：${restoredRequest.selection.title}（保留原版本）` : restoredRequest.focusDocument ? `原文档：${restoredRequest.focusDocument.title}（保留原版本）` : restoredRequest.includeProjectContext ? '原范围：当前项目' : '原范围：文字与附件'}
+            {restoredRequest.skill ? ` · 技能：${restoredRequest.skill}` : ''}
+          </div>}
+
+          {collaborationPreview && (collaborationEligible || readOnlyCollaboration) && <label className="mb-2 flex items-center gap-2 text-xs text-[var(--text-secondary)]" title="仅本轮有效；需要计划模式并附加文本文件，子任务不能修改文件或联网">
+            <input type="checkbox" checked={readOnlyCollaboration} disabled={conversationLocked || (!collaborationEligible && !readOnlyCollaboration)}
+              onChange={(event) => setReadOnlyCollaboration(event.target.checked)} />
+            允许本轮只读协作
+          </label>}
           <ChatComposer
             placeholder={
               historyLoading
@@ -1657,7 +1747,7 @@ export default function ProjectChatPanel({
                       ? '对选中内容下指令…'
                       : continuationContext
                         ? '继续调整当前修改…'
-                        : composerPlaceholder ?? (hasProjectScope ? '问项目…' : `向 ${engineLabel} Agent 下达任务…`)
+                        : composerPlaceholder ?? (hasProjectScope ? '问项目…' : '描述任务，系统自动安排…')
             }
             onSend={handleSend}
             commands={isSidecar ? [] : hermesCapabilitySnapshot?.commands ?? []}
@@ -1667,10 +1757,10 @@ export default function ProjectChatPanel({
             onPickReference={handleComposerReference}
             onCommand={handleComposerCommand}
             prefill={composerPrefill}
-            composerKey={currentThreadId ?? 'draft'}
+            composerKey={submissionKey}
             liveDraftRef={composerDraftRef}
             canSubmit={attachments.length > 0}
-            running={runningRunId != null}
+            running={runningRunId != null || pendingSubmission != null || workflowLocked}
             locked={conversationLocked}
             lockLabel={
               historyLoading
@@ -1682,7 +1772,9 @@ export default function ProjectChatPanel({
                     : undefined
             }
             onStop={() => {
-              if (runningRunId) void cancelRun(runningRunId);
+              if (pendingSubmission) void cancelPendingSubmission(submissionKey);
+              else if (runningRunId) void cancelRun(runningRunId);
+              else if (workflowLocked && workflowRunId) void cancelRun(workflowRunId);
             }}
             selectionChip={(workspaceRoot || selection || continuationContext || (activeDocumentId && activeDocumentTitle) || (includeProjectContext && hasProjectScope)) ? (
               <>
@@ -1719,7 +1811,7 @@ export default function ProjectChatPanel({
                 onClear={() => setAttachments((items) => items.filter((item) => item.id !== attachment.id))}
               />
             ))}
-            error={composerError ?? (isSidecar ? sidecarError : null)}
+            error={composerError}
             onPasteImage={(file) => void appendPastedImage(file, file.name || '粘贴图片')}
             leftSlot={
               <>
@@ -1739,8 +1831,6 @@ export default function ProjectChatPanel({
                 >
                   <Plus size={14} />
                 </button>
-                <AgentEngineControl value={engine}
-                  disabled={creatingThread} onSelect={selectEngine} />
                 <ComposerPermissionControl
                   value={effectivePermissionMode}
                   onChange={changePermissionMode}
@@ -1789,9 +1879,9 @@ export default function ProjectChatPanel({
                 className="h-7 max-w-[168px] inline-flex items-center gap-1 rounded-lg px-2 text-xs text-[var(--text-tertiary)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text-secondary)] disabled:opacity-40"
                 title={displayProvider
                   ? `${displayProvider} · ${displayModel}`
-                  : displayModelError ?? (isSidecar ? `正在读取 ${engineLabel} 模型` : '正在读取 Hermes Runtime 模型')}
+                  : displayModelError ?? '选择模型'}
               >
-                <span className="truncate">{displayModel || (isSidecar && sidecarModelsLoading ? '正在读取模型…' : '未配置模型')}</span>
+                <span className="truncate">{displayModel || '未配置模型'}</span>
                 <ChevronDown size={10} className="shrink-0" />
               </button>
               </>
@@ -1929,7 +2019,7 @@ const ChatMessageView = memo(function ChatMessageView({
 }: {
   message: AgentMessage;
   durationMs?: number;
-  /** 流式未定稿：过程轨默认展开 */
+  /** 流式未定稿；运行中显示最近进展，结束后收起过程。 */
   streaming?: boolean;
   /** 同 runId 工具步骤（进过程轨；富卡仍可另挂时间线） */
   processCards?: ToolCard[];
@@ -1964,26 +2054,29 @@ const ChatMessageView = memo(function ChatMessageView({
   return (
     <article className="hb-chat-timeline-item w-full">
       <div className="w-full min-w-0">
+        <div className="sn-chat-answer w-full" role="region" aria-label="回复">
+          {showAreaBContent ? (
+            <StreamingMarkdownBody content={message.content} streaming={phase === 'answering'} />
+          ) : phase === 'answering' && !hasAnswer ? (
+            <p className="text-[12px] text-[var(--text-tertiary)]">正在生成回复…</p>
+          ) : null}
+        </div>
+        <div className={hasAnswer ? "mt-3" : undefined}>
         <ProcessRail
           phase={phase}
           durationMs={durationMs}
           processCards={processCards}
           startedAt={processStartedAt}
           lastEventAt={lastEventAt}
+          actions={phase === 'done' && hasAnswer && !streaming ? <>
+            <AnswerCopyButton content={message.content} />
+            {onSaveAnswer && <button type="button" disabled={saveDisabled} onClick={() => void onSaveAnswer(message)}
+              className="sn-inline-action py-1 text-xs disabled:opacity-40"
+              title="将完整回答追加到当前笔记，先在左侧审阅后保存">
+              写入当前笔记
+            </button>}
+          </> : undefined}
         />
-        {onSaveAnswer && phase === 'done' && hasAnswer && !streaming && (
-          <button type="button" disabled={saveDisabled} onClick={() => void onSaveAnswer(message)}
-            className="mt-2 rounded-md px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-subtle)] disabled:opacity-40"
-            title="将完整回答追加到当前笔记，先在左侧审阅后保存">
-            写入当前笔记
-          </button>
-        )}
-        <div className="sn-chat-answer mt-3 w-full" role="region" aria-label="回复">
-          {showAreaBContent ? (
-            <StreamingMarkdownBody content={message.content} streaming={phase === 'answering'} />
-          ) : phase === 'answering' && !hasAnswer ? (
-            <p className="text-[12px] text-[var(--text-tertiary)]">正在生成回复…</p>
-          ) : null}
         </div>
       </div>
     </article>
@@ -3244,15 +3337,15 @@ function ChatComposer({
     draftRef.current = '';
     // 提交即消费草稿，不等待启动 Run/刷新 Thread 列表。否则事件流中的用户
     // 消息已经出现，textarea 仍会保留同一段文字，造成“似乎没有发送”的错觉。
-    setText('');
     setSending(true);
     try {
       const sent = await onSend(t);
       if (sent) {
+        setText('');
         historyRef.current = rememberComposerHistory(historyRef.current, t);
       } else {
         // 启动失败时恢复原草稿；若用户已开始输入下一条，保留两段内容。
-        setText((current) => current.trim() ? `${t}\n${current}` : t);
+        setText((current) => current || t);
       }
     } finally {
       setSending(false);

@@ -4,11 +4,11 @@
 
 官方网站：[sophonote.com](https://sophonote.com) · [GitHub Releases](https://github.com/MarkingYang/sophonote/releases)
 
-SophoNote 是使用开源 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 、[Pi](https://github.com/earendil-works/pi) 和 [OpenCode](https://github.com/anomalyco/opencode) 作为可选执行引擎的 macOS 本地优先 AI 知识工作台，也支持本机安装的 Claude Code。笔记、发现、权限和文档审阅留在 SophoNote。它不是 Hermes Desktop 的分叉，也不复刻其界面。
+SophoNote 是使用开源 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 、[Pi](https://github.com/earendil-works/pi) 和 [OpenCode](https://github.com/anomalyco/opencode) 作为内部执行引擎的 macOS 本地优先 AI 知识工作台，也支持本机安装的 Claude Code。笔记、发现、权限和文档审阅留在 SophoNote。它不是 Hermes Desktop 的分叉，也不复刻其界面。
 
 SophoNote 是钉扎智能体 Sidecar 外围的 **Client Surface**：
 
-- Hermes、Pi、Claude Code、OpenCode 按会话选择，共享模型配置和回复界面；首次执行后固定引擎，切换时新建会话。
+- 当前源码已接入任务自动路由，共享模型配置和回复界面；用户不再选择 Hermes、Pi、Claude Code、OpenCode，已有会话延续原引擎。自动验证已通过，宿主交互验收进度见项目台账；已发布版本可能仍保留旧选择器。
 - Hermes 的原生 Skill/MCP、Browser、Cron 保留为专属能力；Pi/Claude/OpenCode 使用 Rust 受控工具。四引擎均可经显式确认接入 OpenViking 云端记忆。
 - SophoNote 拥有笔记、发现、权限、审批、文件和审计。
 - 文档修改必须经过范围绑定、diff、用户决策和冲突检查。
@@ -74,11 +74,11 @@ pnpm install
 Hermes 以钉扎 Sidecar（Hermes 0.20.0 + CPython 3.11）随应用分发。Release 使用随包 Runtime 或已验证的私有更新槽，失败时回退随包版本。二进制不入库：贡献者如何构建 sidecar、附着外部 Gateway、打包和公证，见 [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)。
 
 
-新会话也可在输入框下方选择 **Pi**（首次发送后固定引擎）。Pi 0.85.1 以独立可执行程序分发，复用「设置 → AI 模型」中的 OpenAI 兼容 / Anthropic 配置；源码开发先运行 `pnpm pi:bundle`（Python 3.12+，首次下载需要网络）。支持流式回复、会话续接、取消、文件审批和文档 Diff；macOS 命令需逐次批准。Pi 首版暂不提供 Hermes 的浏览器、电脑控制、原生 Skill/MCP 管理。
+**Pi** 是内部路由候选，首次执行后绑定会话。Pi 0.85.1 以独立可执行程序分发，复用「设置 → AI 模型」中的 OpenAI 兼容 / Anthropic 配置；源码开发先运行 `pnpm pi:bundle`（Python 3.12+，首次下载需要网络）。支持流式回复、会话续接、取消、文件审批和文档 Diff；macOS 命令需逐次批准。Pi 首版暂不提供 Hermes 的浏览器、电脑控制、原生 Skill/MCP 管理。
 
-同一菜单还可选择 **Claude Code**。需本机安装官方 [Claude Code CLI](https://code.claude.com/docs/en/setup) 2.1.233 或更新版本；应用自动识别常见安装位置，也可通过宿主环境变量 `SOPHONOTE_CLAUDE_BIN` 指定绝对路径。它共用 AI 模型设置中的 Anthropic 协议供应商及官方 DeepSeek 配置（DeepSeek 自动适配官方 Anthropic 端点，无需另配密钥），隔离原生历史，工具由 Rust 宿主管控，不复用个人订阅登录或全局插件；CLI 不随应用再分发。已有会话切换引擎时新建会话，并保留未发送文字与附件。
+**Claude Code** 也是内部路由候选。需本机安装官方 [Claude Code CLI](https://code.claude.com/docs/en/setup) 2.1.233 或更新版本；应用自动识别常见安装位置，也可通过宿主环境变量 `SOPHONOTE_CLAUDE_BIN` 指定绝对路径。它共用 AI 模型设置中的 Anthropic 协议供应商及官方 DeepSeek 配置（DeepSeek 自动适配官方 Anthropic 端点，无需另配密钥），隔离原生历史，工具由 Rust 宿主管控，不复用个人订阅登录或全局插件；CLI 不随应用再分发。已有会话继续原生历史，不自动跨引擎迁移。
 
-**OpenCode** 同样可在引擎菜单选择，官方 1.18.31 独立程序随应用分发和更新。源码开发先运行 `pnpm opencode:bundle`；支持 OpenAI 兼容 / Anthropic 模型、原生多轮历史、流式回复、取消及 Rust 工具审批和笔记 Diff。Hermes 专属能力不跨引擎共享。
+**OpenCode** 同样作为内部路由候选，官方 1.18.31 独立程序随应用分发和更新。源码开发先运行 `pnpm opencode:bundle`；支持 OpenAI 兼容 / Anthropic 模型、原生多轮历史、流式回复、取消及 Rust 工具审批和笔记 Diff。Hermes 专属能力不跨引擎共享。
 
 引擎更新统一位于 **设置 → Agent 配置更新**。Hermes 在私有目录准备版本，重启应用后生效；Pi 校验官方稳定版归档和宿主权限扩展后启用私有版本槽，后续运行使用；Claude Code 调用识别出的原生/npm 更新器或原 Homebrew cask，自定义安装显示手动指引。更新保留模型配置与会话历史。
 

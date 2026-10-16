@@ -86,7 +86,7 @@ describe('Hermes discovery card actions', () => {
   it('submits only action/itemId through the native discovery Skill and waits for completion', async () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === 'agent_hermes_models') return modelOptionsResponse;
-      if (command === 'agent_thread_list') {
+      if ((command === 'agent_thread_list' || command === 'light_response_list')) {
         return { success: true, data: [], error: null };
       }
       expect(command).toBe('agent_run_start');
@@ -121,7 +121,7 @@ describe('Hermes discovery card actions', () => {
   it('surfaces the real Hermes terminal error', async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === 'agent_hermes_models') return modelOptionsResponse;
-      if (command === 'agent_thread_list') {
+      if ((command === 'agent_thread_list' || command === 'light_response_list')) {
         return { success: true, data: [], error: null };
       }
       setTimeout(() => {
@@ -149,7 +149,7 @@ describe('Hermes discovery card actions', () => {
   it('marks regeneration explicitly while keeping the native discovery Skill route', async () => {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === 'agent_hermes_models') return modelOptionsResponse;
-      if (command === 'agent_thread_list') return { success: true, data: [], error: null };
+      if ((command === 'agent_thread_list' || command === 'light_response_list')) return { success: true, data: [], error: null };
       const request = (args as { request: Record<string, unknown> }).request;
       expect(request.message).toBe(
         'action=deep itemId=item-42 regenerate=true language=zh-CN',

@@ -203,6 +203,7 @@ cp -R "$SOURCE/skills" "$TMP/seed/skills"
 
 # Hosted OpenViking authenticates every route, including /health.
 "$PYTHON_BIN" "$ROOT/scripts/patch-hermes-cloud-memory.py" "$RUNTIME/site-packages"
+"$PYTHON_BIN" "$ROOT/scripts/patch-hermes-host-tools.py" "$RUNTIME/site-packages"
 
 PYTHONHOME="$RUNTIME/python" PYTHONPATH="$RUNTIME/site-packages" \
   "$PYTHON_BIN" -c \

@@ -293,6 +293,7 @@ async fn start_from_resource(
         .env("HERMES_HOME", &hermes_home)
         .env("HERMES_DASHBOARD_SESSION_TOKEN", &token)
         .env("HERMES_SERVE_HEADLESS", "1")
+        .env("SOPHONOTE_HOST_TOOLS_REQUIRED", "1")
         .env("HERMES_DESKTOP", "1")
         .env("SOPHONOTE_HOST_PID", std::process::id().to_string())
         // Hermes 的 HTTP MCP 客户端会读取系统代理环境。若 loopback 没有进入
@@ -342,7 +343,36 @@ async fn start_from_resource(
         String::new()
     };
     command.env("OPENVIKING_API_KEY", openviking_key);
-    for (name, value) in provider_environment(app)? {
+    let route_conn = rusqlite::Connection::open(crate::db::get_db_path(app))
+        .map_err(|_| "无法读取运行时模型版本")?;
+    let route_fence = crate::agent::automatic::Fence::capture(&route_conn)?;
+    let provider_env = provider_environment(app)?;
+    let snapshots = crate::model::openai_compat::configured_provider_snapshots(app)
+        .map_err(|_| "无法读取模型配置")?;
+    let routed_providers = snapshots
+        .iter()
+        .filter(|p| {
+            let prefix = provider_env_prefix(&p.id);
+            // Alias/colliding env prefixes cannot prove a unique destination.
+            snapshots
+                .iter()
+                .filter(|other| provider_env_prefix(&other.id) == prefix)
+                .count()
+                == 1
+                && provider_env
+                    .get(&format!("{prefix}_BASE_URL"))
+                    .is_some_and(|url| {
+                        url == &p.base_url
+                            || (!p.requires_key
+                                && super::local_proxy::proxy_port().is_some_and(|port| {
+                                    url == &super::local_proxy::proxy_base_url(port, &p.id)
+                                }))
+                    })
+                && provider_env.contains_key(&format!("{prefix}_API_KEY"))
+        })
+        .map(|p| p.id.clone())
+        .collect::<Vec<_>>();
+    for (name, value) in provider_env {
         command.env(name, value);
     }
     #[cfg(windows)]
@@ -381,6 +411,13 @@ async fn start_from_resource(
                 let endpoint =
                     HermesGatewayEndpoint::bundled(format!("ws://127.0.0.1:{port}/api/ws"), token)
                         .map_err(|error| error.to_string())?;
+                if route_fence.verify(&route_conn).is_ok() {
+                    crate::agent::automatic::record_hermes_binding(
+                        endpoint.ws_url.clone(),
+                        route_fence,
+                        routed_providers,
+                    );
+                }
                 HermesGatewayEndpoint::install_bundled(endpoint.clone());
                 let _ = BUNDLED_GATEWAY_BOOT_EPOCH.set(now_epoch_seconds());
                 eprintln!(
@@ -771,9 +808,6 @@ fn provider_environment(app: &AppHandle) -> Result<BTreeMap<String, String>, Str
     }
     for (provider, base_url, requires_key) in configured {
         let mut key = String::new();
-        // 免鉴权实例命中安全网改用真实凭据时置 true：基址不再改写为剥鉴权代理
-        //（真实 Bearer 不能被剥离），直接连真实端点。
-        let mut keyless_override_to_authed = false;
         if requires_key {
             key = match crate::commands::get_cached_api_key(app, &provider) {
                 Ok(key) => key,
@@ -787,29 +821,8 @@ fn provider_environment(app: &AppHandle) -> Result<BTreeMap<String, String>, Str
                 }
             };
         }
-        if key.is_empty() && !requires_key {
-            // 免鉴权语义只对本地/私有网络端点成立。若端点是云上（非本地）而设置
-            // 里又存着真实凭据，几乎必然是抽屉里误把「需要鉴权」关掉——占位凭据发
-            // 往云端必 401。此时安全网改用真实凭据，按鉴权处理。本地端点（Ollama、
-            // vLLM 等）保持占位值，让 Hermes 将该 provider 视为已配置。
-            let trimmed_url = base_url.as_deref().map(str::trim).unwrap_or("");
-            let is_local =
-                trimmed_url.is_empty() || super::local_proxy::is_local_endpoint(trimmed_url);
-            if is_local {
-                key = "sophonote-local".to_string();
-            } else if let Ok(saved) = crate::commands::get_cached_api_key(app, &provider) {
-                if !saved.is_empty() {
-                    key = saved;
-                    keyless_override_to_authed = true;
-                    eprintln!(
-                        "[hermes] provider={provider} marked keyless but non-local endpoint with saved credential; using saved credential"
-                    );
-                } else {
-                    key = "sophonote-local".to_string();
-                }
-            } else {
-                key = "sophonote-local".to_string();
-            }
+        if !requires_key {
+            key = "sophonote-local".to_string();
         }
         if key.is_empty() {
             continue;
@@ -828,7 +841,7 @@ fn provider_environment(app: &AppHandle) -> Result<BTreeMap<String, String>, Str
                 // config 条目，若注入真实地址请求会绕过代理、占位 Bearer 直发
                 // 真实端点被校验 401。安全网改用真实凭据的实例除外（真实 Bearer
                 // 不能被代理剥离）。
-                let effective = if !requires_key && !keyless_override_to_authed {
+                let effective = if !requires_key {
                     match super::local_proxy::proxy_port() {
                         Some(port) if super::local_proxy::is_http_target(base_url) => {
                             super::local_proxy::proxy_base_url(port, &provider)

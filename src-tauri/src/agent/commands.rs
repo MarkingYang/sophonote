@@ -80,6 +80,9 @@ fn hermes_session_for_thread(
 ) -> Result<Option<String>, String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
     let store = crate::agent::store::RunStore::new(conn);
+    store
+        .require_user_thread(thread_id)
+        .map_err(|e| e.to_string())?;
     if store
         .get_thread(thread_id)
         .map_err(|e| e.to_string())?
@@ -226,6 +229,7 @@ async fn run_spike_command(
             hermes_provider: None,
             hermes_command: None,
             hermes_workspace_root: None,
+            hermes_host_scope: None,
             hermes_attachments: Vec::new(),
             hermes_focus_document: None,
             hermes_project_context: false,
@@ -434,6 +438,9 @@ pub async fn agent_thread_close(app: AppHandle, thread_id: String) -> ApiRespons
             Err(e) => return ApiResponse::err(format!("打开数据库失败: {}", e)),
         };
         let store = crate::agent::store::RunStore::new(conn);
+        if let Err(error) = store.require_user_thread(&thread_id) {
+            return ApiResponse::err(error.to_string());
+        }
         let has_user_message = match store.get_messages(&thread_id) {
             Ok(messages) => messages
                 .iter()
@@ -645,6 +652,9 @@ pub async fn agent_thread_messages(
     };
 
     let store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_thread(&thread_id) {
+        return ApiResponse::err(error.to_string());
+    }
     match store.get_messages(&thread_id) {
         Ok(msgs) => ApiResponse::ok(msgs),
         Err(e) => ApiResponse::err(e.to_string()),
@@ -665,6 +675,9 @@ pub async fn agent_run_events_replay(
     };
 
     let store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_run(&run_id) {
+        return ApiResponse::err(error.to_string());
+    }
     match store.replay_after_seq(&run_id, after_seq) {
         Ok(events) => ApiResponse::ok(events),
         Err(e) => ApiResponse::err(e.to_string()),
@@ -691,6 +704,9 @@ pub async fn agent_run_snapshot(
     };
 
     let store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_run(&run_id) {
+        return ApiResponse::err(error.to_string());
+    }
     match store.state_snapshot(&run_id) {
         Ok(Some(snapshot)) => ApiResponse::ok(snapshot),
         Ok(None) => ApiResponse::err(format!("Run {} 不存在或已删除", run_id)),
@@ -715,6 +731,9 @@ pub async fn agent_run_reconcile(
         Err(e) => return ApiResponse::err(format!("打开数据库失败: {}", e)),
     };
     let mut store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_run(&run_id) {
+        return ApiResponse::err(error.to_string());
+    }
     if !global_cancel_registry().contains(&run_id) {
         let snapshot = match store.state_snapshot(&run_id) {
             Ok(Some(snapshot)) => snapshot,
@@ -728,6 +747,14 @@ pub async fn agent_run_reconcile(
                 | crate::agent::types::RunStatus::Cancelled
                 | crate::agent::types::RunStatus::Interrupted
         ) {
+            return ApiResponse::ok(snapshot);
+        }
+        // A newly committed dispatch may not have registered its native token yet.
+        // Absence of that token is not proof of an orphan during the dispatch window.
+        let dispatch_pending = rusqlite::Connection::open(&db_path).ok().and_then(|conn| conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_submissions WHERE run_id=?1 AND state='dispatching' AND created_at>=?2)",
+            rusqlite::params![run_id,super::submission::live::now_ms()-120_000],|r|r.get::<_,bool>(0)).ok()).unwrap_or(true);
+        if dispatch_pending {
             return ApiResponse::ok(snapshot);
         }
         if store
@@ -936,6 +963,9 @@ pub async fn agent_run_delete(app: AppHandle, run_id: String) -> ApiResponse<()>
     };
 
     let store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_run(&run_id) {
+        return ApiResponse::err(error.to_string());
+    }
     match store.delete_run_cascade(&run_id) {
         Ok(_) => ApiResponse::ok(()),
         Err(e) => ApiResponse::err(e.to_string()),
@@ -945,9 +975,12 @@ pub async fn agent_run_delete(app: AppHandle, run_id: String) -> ApiResponse<()>
 // ---------------- AG-14：Phase 2 集成命令（RunController + RunStore）----------------
 
 /// AG-14 启动运行入参
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunStartArgs {
+    /// Explicit authorization for this submission only; never inferred from text.
+    #[serde(default)]
+    pub read_only_collaboration: bool,
     /// 首次运行可选引擎；已有会话固定绑定。
     #[serde(default)]
     pub engine: Option<String>,
@@ -997,8 +1030,7 @@ pub struct AgentRunStartArgs {
     /// Chat / 项目显式授权的本地工作目录；命令层会 canonicalize 后交给 Hermes。
     #[serde(default)]
     pub workspace_root: Option<String>,
-    /// 前端权限模式。当前由 SophoNote 宿主编辑器/终端强制执行，并随会话展示；
-    /// Hermes 仍使用自身原生危险操作审批，不能把此字段误当成 Runtime 沙箱。
+    /// 工作区权限模式，由 Rust Host 工具边界强制执行；Hermes 原生工具不获执行许可。
     #[serde(default)]
     pub workspace_permission_mode: Option<String>,
 }
@@ -1719,6 +1751,38 @@ fn configured_hermes_model_options(
         }
     }
     limit_hermes_model_options(options, &allowlist)
+}
+
+pub(crate) async fn verify_automatic_hermes(
+    provider: &str,
+    model: &str,
+    fence: &super::automatic::Fence,
+) -> Result<(), String> {
+    let endpoint =
+        super::hermes::HermesGatewayEndpoint::from_env().ok_or("任务执行环境尚未连接")?;
+    if !super::automatic::hermes_matches(&endpoint.ws_url, fence, provider) {
+        return Err("运行时模型配置尚未同步，请在设置中重启运行时".into());
+    }
+    let options = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        load_hermes_model_options(),
+    )
+    .await
+    .map_err(|_| "模型目录检查超时")??;
+    if options
+        .providers
+        .iter()
+        .filter(|p| {
+            p.slug == provider
+                && p.authenticated == Some(true)
+                && p.models.iter().any(|m| m == model)
+        })
+        .count()
+        != 1
+    {
+        return Err("运行时无法确认所选模型".into());
+    }
+    Ok(())
 }
 
 async fn load_configured_hermes_model_options(
@@ -4427,20 +4491,24 @@ pub async fn agent_run_start(
             return ApiResponse::err("当前笔记上下文不完整，请重新打开笔记后发送".into());
         }
     }
-    let engine = match super::pi::resolve_request_engine(&app, &request) {
-        Ok(engine) => engine,
+    let route = match super::routing::resolve_request(&app, &request) {
+        Ok(route) => route,
         Err(error) => return ApiResponse::err(error),
     };
-    if engine == "claude_code" {
-        return super::pi::start_engine(app, request, on_event, "claude_code").await;
-    }
-    if engine == "opencode" {
-        return super::pi::start_engine(app, request, on_event, "opencode").await;
-    }
-    if engine == "pi" {
-        return super::pi::start(app, request, on_event).await;
-    }
+    super::registry::start(app, request, on_event, route).await
+}
+
+pub(crate) async fn start_hermes(
+    app: AppHandle,
+    request: AgentRunStartArgs,
+    on_event: tauri::ipc::Channel<AgentEvent>,
+    route: super::routing::RouteDecision,
+) -> ApiResponse<AgentRunStartResult> {
     let db_path = crate::db::get_db_path(&app);
+    let hermes_host_scope = match super::hermes::host_tools::prepare(&app, &request) {
+        Ok(scope) => Some(scope),
+        Err(error) => return ApiResponse::err(error),
+    };
 
     let workspace_permission_mode = request
         .workspace_permission_mode
@@ -4496,17 +4564,41 @@ pub async fn agent_run_start(
 
     // 0. 只允许 Hermes Runtime 与 SophoNote 设置共同确认可用的模型。
     // Runtime 的可发现目录不能绕过设置中的供应商、凭据与模型白名单。
-    let model_options = match load_configured_hermes_model_options(&app).await {
-        Ok(options) => options,
-        Err(error) => return ApiResponse::err(error),
-    };
-    let (selected_hermes_provider, selected_hermes_model) = match resolve_hermes_model(
-        &model_options,
-        requested_hermes_provider,
-        requested_hermes_model.as_deref(),
-    ) {
-        Ok(selection) => selection,
-        Err(error) => return ApiResponse::err(error),
+    let (selected_hermes_provider, selected_hermes_model) = if let Some(fence) = &route.fence {
+        let Some(provider) = requested_hermes_provider else {
+            return ApiResponse::err("缺少模型供应商".into());
+        };
+        let Some(model) = requested_hermes_model.as_deref() else {
+            return ApiResponse::err("缺少模型选择".into());
+        };
+        if let Err(error) = verify_automatic_hermes(provider, model, fence).await {
+            return ApiResponse::err(error);
+        }
+        let snapshot = match crate::model::openai_compat::resolve_provider(&app, Some(provider)) {
+            Ok(p) => p,
+            Err(_) => return ApiResponse::err("模型配置不可用".into()),
+        };
+        if snapshot.requires_key
+            && !crate::commands::get_cached_api_key(&app, provider)
+                .is_ok_and(|key| !key.trim().is_empty())
+        {
+            return ApiResponse::err("无法读取模型凭据，请在模型设置中重新保存".into());
+        }
+        (provider.to_string(), model.to_string())
+    } else {
+        let model_options = match load_configured_hermes_model_options(&app).await {
+            Ok(options) => options,
+            Err(error) => return ApiResponse::err(error),
+        };
+        let (selected_hermes_provider, selected_hermes_model) = match resolve_hermes_model(
+            &model_options,
+            requested_hermes_provider,
+            requested_hermes_model.as_deref(),
+        ) {
+            Ok(selection) => selection,
+            Err(error) => return ApiResponse::err(error),
+        };
+        (selected_hermes_provider, selected_hermes_model)
     };
     let gateway: SharedGateway = Arc::new(HermesOwnedModelGateway);
     // DEC-020：产品 Chat 不再拥有 PromptRegistry；记录 Surface 协议版本用于审计。
@@ -4596,29 +4688,71 @@ pub async fn agent_run_start(
     let max_turns = request.max_turns.unwrap_or(6).clamp(1, 20);
 
     // provider/model 直接记录 Hermes Runtime 的真实选择。
-    if let Err(e) = store.with_run_claim(&thread_id, "hermes", || {
-        if store
-            .get_thread(&thread_id)?
-            .and_then(|thread| thread.project_id)
-            != effective_project
-        {
-            return Err(crate::agent::store::RunStoreError::Generic(
-                "任务所属项目已变化，请重新打开任务后再试".into(),
-            ));
-        }
-        store.create_run(
-            &run_id,
-            &thread_id,
-            effective_project.as_deref(),
-            &selected_hermes_provider,
-            &selected_hermes_model,
-            Some(prompt_version.as_str()),
-            max_turns,
-            now_ms,
-        )?;
-        store.set_run_engine(&run_id, selected_engine_id, selected_engine_version)?;
-        store.set_latest_run_id(&thread_id, &run_id, now_ms)
-    }) {
+    let user_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
+    if let Err(e) =
+        store.with_submission_claim(&thread_id, "hermes", route.submission.as_ref(), || {
+            if store
+                .get_thread(&thread_id)?
+                .and_then(|thread| thread.project_id)
+                != effective_project
+            {
+                return Err(crate::agent::store::RunStoreError::Generic(
+                    "任务所属项目已变化，请重新打开任务后再试".into(),
+                ));
+            }
+            route
+                .verify_fence(
+                    &rusqlite::Connection::open(&db_path)
+                        .map_err(|e| crate::agent::store::RunStoreError::Generic(e.to_string()))?,
+                )
+                .map_err(crate::agent::store::RunStoreError::Generic)?;
+            store.create_run(
+                &run_id,
+                &thread_id,
+                effective_project.as_deref(),
+                &selected_hermes_provider,
+                &selected_hermes_model,
+                Some(prompt_version.as_str()),
+                max_turns,
+                now_ms,
+            )?;
+            store.set_run_engine(&run_id, selected_engine_id, selected_engine_version)?;
+            let locked_route = super::routing::resolve_from_store(
+                &store,
+                Some(&thread_id),
+                request.engine.as_deref(),
+            )
+            .map_err(crate::agent::store::RunStoreError::Generic)?;
+            if locked_route.engine() != route.engine() {
+                return Err(crate::agent::store::RunStoreError::Generic(
+                    "会话引擎已变化，请重试".into(),
+                ));
+            }
+            // This legacy probe checks configuration, not runtime version or live health.
+            let snapshot = super::routing::CapabilitySnapshot::new(
+                route.engine(),
+                None,
+                if engine_will_fail {
+                    super::routing::PreparationEvidence::Unavailable
+                } else {
+                    super::routing::PreparationEvidence::HermesConfigurationOnly
+                },
+                None,
+                now_ms,
+            );
+            store.record_route(&run_id, &route, &snapshot)?;
+            store.save_message(
+                &user_msg_id,
+                &thread_id,
+                &run_id,
+                "user",
+                &visible_user_message,
+                now_ms,
+            )?;
+            store.bind_submission(&run_id, route.submission.as_ref(), now_ms)?;
+            store.set_latest_run_id(&thread_id, &run_id, now_ms)
+        })
+    {
         return ApiResponse::err(format!("创建 Run 失败: {e}"));
     }
     if let Some(session_id) = hermes_session_id.as_deref() {
@@ -4656,20 +4790,7 @@ pub async fn agent_run_start(
 
     // 历史只由 Hermes Session 恢复；SophoNote 本地消息表是展示/审计副本，不回灌模型。
 
-    // 2.7 持久化用户消息（AG-18 b）：agent_messages 是 agent_thread_messages 命令
-    // 与未来「对话历史」菜单的数据源。先保存再 move 进 SpikeParams；
-    // 失败非致命——事件流（seq=0 run_started）仍是渲染主路径。
-    let user_msg_id = format!("msg-{}", uuid::Uuid::new_v4());
-    if let Err(e) = store.save_message(
-        &user_msg_id,
-        &thread_id,
-        &run_id,
-        "user",
-        &visible_user_message,
-        now_ms,
-    ) {
-        eprintln!("[agent] 持久化用户消息失败（不阻断运行）: {e}");
-    }
+    // 用户消息已与 Run、路由和提交绑定原子保存。
     // 标题等助手回复落地后再生成（refresh 仅在 completed + final_answer）
 
     // 3. 创建传输层（AG-20 RunStore-first，审计 P0-3 整改项①②）：
@@ -4734,6 +4855,7 @@ pub async fn agent_run_start(
     // AG-18 c)：登记全局取消令牌，agent_run_cancel 凭 run_id 查找触发；
     // 终态后在 spawn 闭包尾部注销防泄漏
     global_cancel_registry().register(&run_id, cancel.clone());
+    super::submission::commands::apply_cancel_intent(&db_path, &run_id, &cancel);
     // Hermes 拥有工具状态机。产品 Run 传空注册表，避免把天气/计算器等历史
     // Spike 工具误认为 Surface 能力；该字段仅为旧 RunEnvelope 兼容存在。
     let registry = Arc::new(ToolRegistry::new());
@@ -4844,6 +4966,7 @@ pub async fn agent_run_start(
             hermes_provider: Some(selected_hermes_provider),
             hermes_command,
             hermes_workspace_root,
+            hermes_host_scope,
             hermes_attachments,
             hermes_focus_document,
             hermes_project_context,
@@ -4995,6 +5118,9 @@ pub async fn agent_thread_history(app: AppHandle, thread_id: String) -> ApiRespo
     };
 
     let store = crate::agent::store::RunStore::new(conn);
+    if let Err(error) = store.require_user_thread(&thread_id) {
+        return ApiResponse::err(error.to_string());
+    }
     // list_runs_by_thread 按创建时间降序 → 逆转为升序（恢复顺序 = 创建顺序）
     let mut runs = match store.list_runs_by_thread(&thread_id) {
         Ok(r) => r,
@@ -5060,18 +5186,35 @@ pub(crate) fn global_cancel_registry() -> &'static CancelRegistry {
 /// 取消一个 Run（AG-18 c）。data=true = 取消信号已发出；
 /// data=false = 该 run 不在注册表（已终态/未知）——终态后到达的取消按 no-op 处理不报错。
 #[tauri::command]
-pub async fn agent_run_cancel(run_id: String) -> ApiResponse<bool> {
-    let dispatched = global_cancel_registry().cancel(&run_id);
-    ApiResponse::ok(dispatched)
+pub async fn agent_run_cancel(app: AppHandle, run_id: String) -> ApiResponse<bool> {
+    let result = (|| {
+        let mut conn = rusqlite::Connection::open(crate::db::get_db_path(&app))
+            .map_err(|_| "无法读取运行状态")?;
+        super::orchestration::sessions::require_user_run(&conn, &run_id)?;
+        let runs = super::orchestration::supervisor::cancel_for_run(
+            &mut conn,
+            &run_id,
+            super::submission::live::now_ms(),
+        )?;
+        Ok::<_, String>(super::orchestration::supervisor::signal(runs))
+    })();
+    match result {
+        Ok(value) => ApiResponse::ok(value),
+        Err(error) => ApiResponse::err(error),
+    }
 }
 
 /// 将 Hermes 原生审批选择回传到当前 Run 所绑定的 Gateway Session。
 #[tauri::command]
 pub async fn agent_run_approval_respond(
     run_id: String,
+    approval_id: String,
     choice: String,
     all: Option<bool>,
 ) -> ApiResponse<bool> {
+    if approval_id.trim().is_empty() || approval_id.len() > 256 {
+        return ApiResponse::err("无效审批身份".into());
+    }
     let choice = choice.trim().to_ascii_lowercase();
     if !matches!(choice.as_str(), "once" | "session" | "always" | "deny") {
         return ApiResponse::err("无效审批选择".into());
@@ -5079,6 +5222,7 @@ pub async fn agent_run_approval_respond(
     ApiResponse::ok(crate::agent::hermes::gateway_client::send_run_control(
         &run_id,
         crate::agent::hermes::gateway_client::GatewayControl::Approval {
+            approval_id,
             choice,
             all: all.unwrap_or(false),
         },

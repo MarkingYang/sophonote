@@ -1,6 +1,6 @@
 #!/bin/bash
 # SophoNote 开发模式生命周期管理
-# 用法: ./scripts/sophonote.sh {start|stop|restart|status|logs|skills}
+# 用法: ./scripts/sophonote.sh {start|stop|restart|status|logs|skills|stop-bundle}
 #
 # Hermes Client Surface：在项目根创建 .env.hermes.local（已 gitignore *.local）：
 #   SOPHONOTE_HERMES_ATTACH_EXTERNAL=1
@@ -190,6 +190,18 @@ cmd_start() {
   echo "⏳ 仍在编译中（已等 ${waited}s），可用 '$0 logs' 查看进度"
 }
 
+# 验证包与安装版可能同时运行。仅按完整可执行路径停止本仓库的
+# Debug bundle；禁止按应用名/bundle id 结束安装版，且不强制杀死。
+cmd_stop_bundle() {
+  local bundle_exe="$ROOT/src-tauri/target/debug/bundle.noindex/macos/SophoNote.app/Contents/MacOS/sophonote"
+  ps -axo pid=,comm= | while read -r pid executable; do
+    if [ "$executable" = "$bundle_exe" ]; then
+      echo "停止本仓库 Debug 验证包 (PID $pid)"
+      kill_tree "$pid"
+    fi
+  done
+}
+
 cmd_stop() {
   if ! is_running; then
     echo "ℹ️  SophoNote 未运行"
@@ -238,6 +250,7 @@ cmd_logs() {
 }
 
 case "${1:-}" in
+  stop-bundle) cmd_stop_bundle ;;
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   restart) cmd_stop; cmd_start ;;

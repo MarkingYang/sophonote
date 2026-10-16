@@ -177,6 +177,17 @@ fn assign_thread(
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    if thread_id.starts_with("response-") {
+        let running: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM response_turns WHERE conversation_id=?1 AND state IN ('preparing','running'))", [thread_id], |r|r.get(0)).map_err(|_| "无法读取响应状态")?;
+        if running {
+            return Err("请先停止当前响应再移动".into());
+        }
+        let changed=tx.execute("UPDATE response_conversations SET project_id=?1,collection_id=NULL WHERE id=?2 AND EXISTS(SELECT 1 FROM projects WHERE id=?1)",rusqlite::params![project_id,thread_id]).map_err(|_| "无法移动响应会话")?;
+        if changed != 1 {
+            return Err("响应会话或目标项目不存在".into());
+        }
+        return tx.commit().map_err(|_| "无法保存响应归属".into());
+    }
     let running: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE thread_id=?1 AND lower(trim(status,'\"')) IN ('queued','running','waiting_approval'))",
         [thread_id], |row| row.get(0),
@@ -290,6 +301,18 @@ fn delete_project_rows(
     if !project_exists {
         return Ok(None);
     }
+
+    // Preserve text history on project deletion; ongoing text requests must finish first.
+    let active_response: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM response_turns t JOIN response_conversations c ON c.id=t.conversation_id WHERE c.project_id=?1 AND t.state IN ('preparing','running'))",[id],|r|r.get(0))?;
+    if active_response {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "请先停止项目中的文本响应".into(),
+        ));
+    }
+    conn.execute(
+        "UPDATE response_conversations SET project_id=NULL WHERE project_id=?1",
+        [id],
+    )?;
 
     // 会话与运行记录继续保留，解除项目范围后可在全局会话中访问。
     conn.execute(
@@ -421,6 +444,65 @@ pub fn project_remove_document(app: AppHandle, article_id: String) -> ApiRespons
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn text_conversation_move_and_project_delete_preserve_history() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO projects(id,name) VALUES('p1','one'),('p2','two');
+            INSERT INTO response_conversations(id,project_id,title,created_at,updated_at) VALUES('response-test','p1','test',1,1);
+            INSERT INTO response_turns(id,conversation_id,intent,message,answer,state,provider,model,created_at,updated_at)
+            VALUES('turn','response-test','intent','question','answer','completed','chosen','model',1,1);").unwrap();
+        assign_thread(&mut conn, "response-test", Some("p2")).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM response_conversations WHERE id='response-test'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "p2"
+        );
+        delete_project_rows(&conn, "p2").unwrap();
+        assert!(conn
+            .query_row(
+                "SELECT project_id FROM response_conversations WHERE id='response-test'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT answer FROM response_turns WHERE id='turn'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "answer"
+        );
+    }
+
+    #[test]
+    fn active_text_conversation_blocks_move_and_project_delete() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO projects(id,name) VALUES('p1','one'),('p2','two');
+            INSERT INTO response_conversations(id,project_id,title,created_at,updated_at) VALUES('response-test','p1','test',1,1);
+            INSERT INTO response_turns(id,conversation_id,intent,message,state,provider,model,created_at,updated_at)
+            VALUES('turn','response-test','intent','question','preparing','chosen','model',1,1);").unwrap();
+        assert!(assign_thread(&mut conn, "response-test", Some("p2")).is_err());
+        assert!(delete_project_rows(&conn, "p1").is_err());
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM response_conversations WHERE id='response-test'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "p1"
+        );
+    }
     use super::*;
 
     fn fixture_project() -> Project {

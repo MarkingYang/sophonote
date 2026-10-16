@@ -275,3 +275,12 @@ describe('Hermes Desktop process activities', () => {
     expect(toolRunActivityLabel(cards, false)).toBe('Explored 1 file');
   });
 });
+
+it('三引擎联网工具显示中文名称、查询和来源', () => {
+  for (const prefix of ['', 'mcp__sophonote__', 'sophonote_']) {
+    expect(toolDisplayName(`${prefix}websearch`)).toBe('搜索网页');
+    expect(toolDisplayName(`${prefix}news_search`)).toBe('查询新闻');
+    expect(toolDisplayName(`${prefix}webfetch`)).toBe('读取网页');
+    expect(toolStepSummary(card({callId:'web',name:`${prefix}news_search`,argumentsJson:'{"query":"今日科技新闻"}'}))).toBe('今日科技新闻');
+  }
+});

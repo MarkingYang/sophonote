@@ -33,15 +33,22 @@ pub mod engine_select;
 pub mod hermes;
 
 // Tauri 命令 + Rig 驱动循环（Rig 类型扩散面收敛在 adapters / run_controller）
+pub(crate) mod candidates;
 pub mod capabilities;
 pub mod commands;
+pub(crate) mod model_preparation;
+pub(crate) mod registry;
+pub(crate) mod routing;
+pub(crate) mod routing_shadow;
 pub mod run_controller;
+pub(crate) mod runtime_observations;
 
 // 版本化 AgentEvent + EventEmitter（零框架类型）
 pub mod events;
 
 // Thread/Run/Message + RunStore（规范真相源）
 pub mod store;
+pub mod submission;
 pub mod types;
 
 #[cfg(test)]
@@ -69,3 +76,12 @@ pub mod runtime_updates;
 pub mod opencode;
 
 pub mod usage;
+
+pub(crate) mod web;
+
+pub(crate) mod automatic;
+
+pub(crate) mod task_profile;
+
+/// AR-S2/3 contracts; runtime admission remains gated.
+pub mod orchestration;

@@ -97,7 +97,7 @@ pub(crate) async fn run(
         "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config", "--mcp-config"])
         .arg(&config.0).args(["--allowedTools", "mcp__sophonote__*", "--permission-mode", "dontAsk", "--no-chrome", "--model"])
         .arg(&prepared.model).arg("--max-turns").arg(prepared.max_turns.to_string())
-        .arg("--append-system-prompt").arg(format!("You are Claude Code inside SophoNote. Authorized workspace: {}. Use only the provided sophonote tools; all paths resolve against that workspace. Explicit document working copies can be edited, but the host will propose a Diff for user review; never edit protected application data. Reply in the user's language.",prepared.scope.workspace.display()))
+        .arg("--append-system-prompt").arg(format!("You are Claude Code inside SophoNote. Authorized workspace: {}. Use only the provided sophonote tools; all paths resolve against that workspace. Explicit document working copies can be edited, but the host will propose a Diff for user review; never edit protected application data. Reply in the user's language. {}",prepared.scope.workspace.display(),crate::agent::web::guidance()))
         .current_dir(&prepared.home).env_clear()
         .env("HOME", &prepared.home).env("CLAUDE_CONFIG_DIR", prepared.home.join("config"))
         .env("ANTHROPIC_API_KEY", if prepared.key.is_empty() { "local-no-key" } else { &prepared.key })

@@ -14,6 +14,31 @@ function renderRequest(request: PendingHermesInput, engineLabel = 'Hermes'): str
 }
 
 describe('HermesInputRequest', () => {
+  it('下一张审批不继承上一张卡片的等待状态或迟到回包', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    let finish!: (accepted: boolean) => void;
+    const onApproval = vi.fn().mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; })).mockResolvedValue(true);
+    const show = (approvalId: string) => root.render(createElement(HermesInputRequest, {
+      engineLabel: 'Hermes', onApproval, onClarify: vi.fn(),
+      request: { runId: 'run', payload: { type: 'approval_required', approvalId, toolName: 'write', argumentsJson: '{}', choices: ['once', 'deny'] } },
+    }));
+    try {
+      await act(async () => show('first'));
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-decision-option]')!.click());
+      await act(async () => show('second'));
+      await act(async () => finish(true));
+      expect(host.querySelector('[role="status"]')).toBeNull();
+      expect(host.querySelector<HTMLButtonElement>('[data-decision-option]')!.disabled).toBe(false);
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-decision-option]')!.click());
+      expect(onApproval.mock.calls).toEqual([['first', 'once'], ['second', 'once']]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
   it('renders approval choices as full-width vertical rows in gateway order', () => {
     const html = renderRequest({
       runId: 'run-1',
@@ -81,7 +106,7 @@ describe.each(['Pi', 'Claude Code', 'OpenCode', 'Hermes'])('%s 输入请求归�
       await act(async () => host.querySelector<HTMLButtonElement>('[data-decision-option]')!.click());
       expect(host.querySelector('[role="status"]')?.textContent).toContain(`已提交给 ${engineLabel}，正在等待后续进展。`);
       expect(respond).toHaveBeenCalledTimes(2);
-      expect(respond.mock.calls[1]).toEqual(type === 'approval_required' ? ['once'] : ['clarify-bound', '当前项目']);
+      expect(respond.mock.calls[1]).toEqual(type === 'approval_required' ? ['approval-bound', 'once'] : ['clarify-bound', '当前项目']);
       if (engineLabel !== 'Hermes') expect(host.textContent).not.toContain('Hermes');
     } finally {
       await act(async () => root.unmount());

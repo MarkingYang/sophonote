@@ -34,36 +34,17 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub fn resolve_request_engine(
-    app: &AppHandle,
-    request: &AgentRunStartArgs,
-) -> Result<String, String> {
-    let conn =
-        rusqlite::Connection::open(crate::db::get_db_path(app)).map_err(|e| e.to_string())?;
-    let thread = match &request.thread_id {
-        Some(id) => Some(
-            RunStore::new(conn)
-                .get_thread(id)
-                .map_err(|e| e.to_string())?
-                .ok_or("会话不存在")?,
-        ),
-        None => None,
-    };
-    resolve_engine(request.engine.as_deref(), thread.as_ref())
-}
-
+#[cfg(test)]
 fn resolve_engine(
     requested: Option<&str>,
     thread: Option<&super::types::AgentThread>,
 ) -> Result<String, String> {
-    let engine = requested.unwrap_or_else(|| thread.map_or("hermes", |t| t.engine.as_str()));
-    if !matches!(engine, "hermes" | "pi" | "claude_code" | "opencode") {
-        return Err("未知智能体引擎".into());
-    }
-    if thread.is_some_and(|t| t.latest_run_id.is_some() && t.engine != engine) {
-        return Err("已有会话的智能体引擎不能切换，请新建会话".into());
-    }
-    Ok(engine.into())
+    super::routing::resolve_binding(
+        requested,
+        thread.map(|t| t.engine.as_str()),
+        thread.is_some_and(|t| t.latest_run_id.is_some()),
+    )
+    .map(|route| route.engine().as_str().into())
 }
 
 fn supported(provider: &ProviderSnapshot) -> bool {
@@ -146,7 +127,7 @@ impl ExecutionRuntime {
             Self::OpenCode(_) => "OpenCode",
         }
     }
-    fn version(&self) -> &str {
+    pub(crate) fn version(&self) -> &str {
         match self {
             Self::Pi(r) => &r.version,
             Self::Claude(r) => &r.version,
@@ -234,29 +215,16 @@ fn prepare(
             "{label} 通过本地工作目录处理项目，请移除项目资料范围并选择工作目录"
         ));
     }
-    let provider =
-        crate::model::openai_compat::resolve_provider(app, request.hermes_provider.as_deref())
-            .map_err(|e| e.to_string())?;
-    let provider = if engine == "claude_code" {
-        super::claude::provider_snapshot(provider)
-            .ok_or("Claude Code 需要 Anthropic 协议或官方 DeepSeek 供应商，请检查模型设置")?
-    } else {
-        provider
-    };
-    if !supported(&provider) {
-        return Err(format!("{label} 当前支持 OpenAI 兼容与 Anthropic 供应商"));
-    }
-    let model = request
-        .hermes_model
-        .clone()
-        .unwrap_or_else(|| provider.model.clone());
-    if !provider.models.contains(&model) {
-        return Err(format!("所选 {label} 模型不在供应商配置白名单中"));
-    }
-    let key = crate::commands::get_cached_api_key(app, &provider.id)?;
-    if provider.requires_key && key.is_empty() {
-        return Err("请先在 AI 模型设置中配置此供应商的 API Key".into());
-    }
+    let super::model_preparation::PreparedModel {
+        provider,
+        model,
+        key,
+    } = super::model_preparation::prepare(
+        app,
+        super::registry::EngineId::parse(engine)?,
+        request.hermes_provider.as_deref(),
+        request.hermes_model.as_deref(),
+    )?;
     let layout = crate::storage_layout::StorageLayout::resolve(app)?;
     let home = if matches!(engine, "claude_code" | "opencode") {
         layout
@@ -314,6 +282,8 @@ fn prepare(
         return Err(format!("不能将受保护的应用目录作为 {label} 工作区"));
     }
     let mut scope = tools::Scope {
+        read_lease: None,
+        readonly: None,
         workspace,
         read_paths: vec![],
         workcopy: None,
@@ -469,38 +439,62 @@ fn prepare(
     })
 }
 
+struct ThreadClaim {
+    engine: String,
+    latest_run_id: Option<String>,
+    project_id: Option<String>,
+    external_session_id: Option<String>,
+}
+
 fn claim_run(
     conn: &mut rusqlite::Connection,
     request: &AgentRunStartArgs,
     binding: &HermesSessionBinding,
-    provider: &str,
-    model: &str,
+    model_selection: (&str, &str),
     max_turns: usize,
-    runtime: &ExecutionRuntime,
+    runtime: (
+        &ExecutionRuntime,
+        Option<&super::orchestration::admission::PreparedCollaboration>,
+    ),
+    initial_route: &super::routing::RouteDecision,
 ) -> Result<(), String> {
+    let (provider, model) = model_selection;
+    let (runtime, collaboration) = runtime;
     let engine = runtime.engine();
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let existing: Option<(String, Option<String>, Option<String>)> = tx
+    initial_route.verify_fence(&tx)?;
+    super::submission::live::check_claim(
+        &tx,
+        &binding.thread_id,
+        initial_route.submission.as_ref(),
+    )
+    .map_err(|e| e.to_string())?;
+    let existing: Option<ThreadClaim> = tx
         .query_row(
-            "SELECT engine, latest_run_id, project_id FROM agent_threads WHERE id=?1",
+            "SELECT engine, latest_run_id, project_id, external_session_id FROM agent_threads WHERE id=?1",
             [&binding.thread_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok(ThreadClaim {
+                engine: row.get(0)?, latest_run_id: row.get(1)?,
+                project_id: row.get(2)?, external_session_id: row.get(3)?,
+            }),
         )
         .optional()
         .map_err(|e| e.to_string())?;
     if request.thread_id.is_some() && existing.is_none() {
         return Err("会话不存在".into());
     }
-    if let Some((engine, latest, project)) = &existing {
-        if binding.project_id != *project {
+    if let Some(thread) = &existing {
+        if binding.project_id != thread.project_id {
             return Err("任务所属项目已变化，请重新打开任务后再试".into());
         }
-        if latest.is_some() && engine != runtime.engine() {
+        if (thread.latest_run_id.is_some() || thread.external_session_id.is_some())
+            && thread.engine != runtime.engine()
+        {
             return Err("已有会话不能切换引擎".into());
         }
-        if request.project_id.is_some() && request.project_id != *project {
+        if request.project_id.is_some() && request.project_id != thread.project_id {
             return Err("会话不属于所选项目".into());
         }
         let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_runs WHERE thread_id=?1 AND lower(trim(status,'\"')) IN ('queued','running','waiting_approval'))",
@@ -512,30 +506,98 @@ fn claim_run(
         tx.execute("INSERT INTO agent_threads (id,title,status,project_id,created_at,updated_at,engine) VALUES (?1,'新会话','\"running\"',?2,?3,?3,?4)",
             rusqlite::params![binding.thread_id, binding.project_id, now_ms(), engine]).map_err(|e| e.to_string())?;
     }
-    tx.execute("INSERT INTO agent_runs (id,thread_id,project_id,status,provider,model,prompt_version,max_model_calls,current_model_calls,engine,engine_version,created_at,updated_at) VALUES (?1,?2,?3,'\"running\"',?4,?5,?9,?6,0,?10,?7,?8,?8)",
+    let mut decision = super::routing::resolve_binding(
+        request.engine.as_deref(),
+        existing.as_ref().map(|thread| thread.engine.as_str()),
+        existing.as_ref().is_some_and(|thread| {
+            thread.latest_run_id.is_some() || thread.external_session_id.is_some()
+        }),
+    )?;
+    decision.carry_preflight(initial_route)?;
+    if decision.engine().as_str() != engine {
+        return Err("会话引擎已变化，请重试".into());
+    }
+    tx.execute("INSERT INTO agent_runs (id,thread_id,project_id,status,provider,model,prompt_version,max_model_calls,current_model_calls,engine,engine_version,created_at,updated_at) VALUES (?1,?2,?3,'\"queued\"',?4,?5,?9,?6,0,?10,?7,?8,?8)",
         rusqlite::params![binding.run_id, binding.thread_id, binding.project_id, provider, model, max_turns, runtime.version(), now_ms(), format!("{engine}-rpc-v1"), engine]).map_err(|e| e.to_string())?;
     tx.execute("UPDATE agent_threads SET engine=?5,latest_run_id=?1,external_session_id=?2,status='\"running\"',updated_at=?3 WHERE id=?4",
         rusqlite::params![binding.run_id,format!("{engine}:{}",stable_id(&binding.thread_id)),now_ms(),binding.thread_id,engine]).map_err(|e| e.to_string())?;
     tx.execute("INSERT INTO agent_messages (id,thread_id,run_id,role,content,source,created_at) VALUES (?1,?2,?3,'user',?4,?6,?5)",
         rusqlite::params![uuid::Uuid::new_v4().to_string(),binding.thread_id,binding.run_id,request.message,now_ms(),engine]).map_err(|e| e.to_string())?;
+    let mut snapshot = super::routing::CapabilitySnapshot::new(
+        decision.engine(),
+        Some(runtime.version()),
+        super::routing::PreparationEvidence::ValidatedRuntime,
+        Some(super::capabilities::prepared_host_tools(
+            request
+                .workspace_permission_mode
+                .as_deref()
+                .unwrap_or("ask"),
+        )),
+        now_ms(),
+    );
+    snapshot.host_delegation = collaboration.is_some();
+    super::routing::persist(&tx, &binding.run_id, &decision, &snapshot)?;
+    super::submission::live::bind_claim(
+        &tx,
+        initial_route.submission.as_ref(),
+        &binding.run_id,
+        now_ms() as i64,
+    )
+    .map_err(|e| e.to_string())?;
+    if let Some(collaboration) = collaboration {
+        collaboration.commit(&tx, &binding.run_id, provider, model, now_ms() as i64)?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 
-pub async fn start(
-    app: AppHandle,
-    request: AgentRunStartArgs,
-    channel: tauri::ipc::Channel<AgentEvent>,
-) -> ApiResponse<AgentRunStartResult> {
-    start_engine(app, request, channel, "pi").await
+pub(crate) fn record_runtime_observation(app: &AppHandle, runtime: &ExecutionRuntime) {
+    let result = (|| -> Result<Vec<PathBuf>, String> {
+        let (executable, pointer, extension) = match runtime {
+            ExecutionRuntime::Pi(r) => (
+                &r.executable,
+                Some(update::root(app)?.join("active.json")),
+                Some(r.extension.clone()),
+            ),
+            ExecutionRuntime::OpenCode(r) => (
+                &r.executable,
+                Some(super::opencode::update::root(app)?.join("active.json")),
+                None,
+            ),
+            ExecutionRuntime::Claude(r) => (&r.executable, None, None),
+        };
+        let mut paths = vec![executable.clone()];
+        if let Some(pointer) = pointer {
+            let root = executable.parent().ok_or("运行时路径无效")?;
+            paths.extend([root.to_path_buf(), root.join("manifest.json"), pointer]);
+        } else {
+            paths.extend(super::claude::runtime::candidate_paths()?);
+        }
+        if let Some(extension) = extension {
+            paths.push(extension);
+        }
+        Ok(paths)
+    })();
+    if let Ok(paths) = result {
+        if let Ok(engine) = super::registry::EngineId::parse(runtime.engine()) {
+            super::runtime_observations::record(
+                crate::db::get_db_path(app),
+                engine,
+                runtime.version(),
+                paths,
+            );
+        }
+    }
 }
 
 pub(crate) async fn start_engine(
     app: AppHandle,
     request: AgentRunStartArgs,
     channel: tauri::ipc::Channel<AgentEvent>,
-    engine: &'static str,
+    route: super::routing::RouteDecision,
 ) -> ApiResponse<AgentRunStartResult> {
+    let engine = route.engine().as_str();
     let result = async {
+        super::orchestration::admission::validate(&request)?;
         let _update_guard = if engine == "claude_code" {
             Some(
                 super::runtime_updates::CLAUDE_GATE
@@ -545,6 +607,7 @@ pub(crate) async fn start_engine(
         } else {
             None
         };
+        super::runtime_observations::invalidate(route.engine());
         let runtime = if engine == "claude_code" {
             ExecutionRuntime::Claude(super::claude::runtime::locate().await?)
         } else if engine == "opencode" {
@@ -556,7 +619,7 @@ pub(crate) async fn start_engine(
                 .await
                 .map_err(|e| e.to_string())??,
             )
-        } else {
+        } else if route.engine() == super::registry::EngineId::Pi {
             let handle = app.clone();
             let runtime = tokio::task::spawn_blocking(move || {
                 update::resolve(&handle).map(|(runtime, _)| runtime)
@@ -564,7 +627,10 @@ pub(crate) async fn start_engine(
             .await
             .map_err(|_| "Pi 校验任务失败")??;
             ExecutionRuntime::Pi(runtime)
+        } else {
+            return Err("此执行入口不支持所选引擎".into());
         };
+        record_runtime_observation(&app, &runtime);
         let label = runtime.label();
         let db_path = crate::db::get_db_path(&app);
         let mut conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
@@ -597,14 +663,17 @@ pub(crate) async fn start_engine(
                 "{label} 会话文件缺失，无法恢复原历史；请恢复应用数据或新建会话"
             ));
         }
+        let collaboration = super::orchestration::admission::PreparedCollaboration::capture(
+            &request, &prepared.scope, prepared.runtime.engine(), prepared.runtime.version(),
+        )?;
         claim_run(
             &mut conn,
             &request,
             &binding,
-            &prepared.provider.id,
-            &prepared.model,
+            (&prepared.provider.id, &prepared.model),
             prepared.max_turns,
-            &prepared.runtime,
+            (&prepared.runtime, collaboration.as_ref()),
+            &route,
         )?;
         let store = Arc::new(RunStoreTransport::new(
             binding.db_path.to_string_lossy().into_owned(),
@@ -646,14 +715,27 @@ pub(crate) async fn start_engine(
             });
         let cancel = CancellationToken::new();
         super::commands::global_cancel_registry().register(&binding.run_id, cancel.clone());
+        super::submission::commands::apply_cancel_intent(
+            &binding.db_path,
+            &binding.run_id,
+            &cancel,
+        );
         let response = AgentRunStartResult {
             thread_id: binding.thread_id.clone(),
             run_id: binding.run_id.clone(),
         };
         tauri::async_runtime::spawn(async move {
             let mut memory = None;
+            let mut workflow_memory = None;
+            let collaborative = super::orchestration::native_child::parent_context(&binding)
+                .ok().flatten().is_some();
             let original_message = request.message.clone();
             let outcome = async {
+                let conn =
+                    rusqlite::Connection::open(&binding.db_path).map_err(|e| e.to_string())?;
+                RunStore::new(conn)
+                    .update_run_status(&binding.run_id, &RunStatus::Running, now_ms())
+                    .map_err(|e| e.to_string())?;
                 events
                     .emit(AgentEventPayload::RunStarted {
                         user_message: request.message,
@@ -687,7 +769,13 @@ pub(crate) async fn start_engine(
                 }
             }
             .await;
-            let (run_status, thread_status) = if cancel.is_cancelled() {
+            let native_stop_unknown = outcome.as_ref().err().is_some_and(|error| error.contains("停止状态待核实"));
+            let (run_status, thread_status) = if native_stop_unknown {
+                let _ = events.emit(AgentEventPayload::EngineDegraded {
+                    reason: "执行进程停止状态待核实，请勿重复发送".into(), reconnecting: false,
+                });
+                (RunStatus::Interrupted, ThreadStatus::Failed)
+            } else if cancel.is_cancelled() {
                 let _ = events.emit(AgentEventPayload::RunCancelled {
                     reason: "用户取消".into(),
                 });
@@ -716,6 +804,9 @@ pub(crate) async fn start_engine(
                                 .refresh_thread_title_from_messages(&binding.thread_id, now_ms());
                         }
                         if let Some(memory) = memory {
+                            if collaborative {
+                                workflow_memory = Some((memory, answer.clone()));
+                            } else {
                             memory
                                 .finish(
                                     &binding.run_id,
@@ -725,6 +816,7 @@ pub(crate) async fn start_engine(
                                     &cancel,
                                 )
                                 .await;
+                            }
                         }
                         if cancel.is_cancelled() {
                             let _ = events.emit(AgentEventPayload::RunCancelled {
@@ -758,6 +850,16 @@ pub(crate) async fn start_engine(
                 let store = RunStore::new(conn);
                 let _ = store.update_run_status(&binding.run_id, &run_status, now_ms());
                 let _ = store.update_thread_status(&binding.thread_id, &thread_status, now_ms());
+            }
+            if let Some((memory, answer)) = workflow_memory {
+                // Only an authoritative whole-workflow success may synchronize.
+                // Child/intermediate native Runs never create RunMemory hooks.
+                let workflow = rusqlite::Connection::open(&binding.db_path).ok().and_then(|conn| {
+                    conn.query_row("SELECT id FROM agent_workflows WHERE root_run_id=?1 AND state='succeeded' AND final_result_ref IS NOT NULL", [&binding.run_id], |r| r.get::<_, String>(0)).optional().ok().flatten()
+                });
+                if let Some(workflow) = workflow {
+                    memory.finish(&workflow, &original_message, &answer, &events, &cancel).await;
+                }
             }
             super::hermes::gateway_client::unregister_run_control(&binding.run_id);
             super::commands::global_cancel_registry().remove(&binding.run_id);
@@ -799,8 +901,9 @@ mod tests {
     fn claude_claim_is_atomic_engine_bound_and_records_native_version() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE agent_threads (id TEXT PRIMARY KEY,title TEXT,status TEXT,project_id TEXT,created_at INTEGER,updated_at INTEGER,engine TEXT,latest_run_id TEXT,external_session_id TEXT);
-            CREATE TABLE agent_runs (id TEXT PRIMARY KEY,thread_id TEXT,project_id TEXT,status TEXT,provider TEXT,model TEXT,prompt_version TEXT,max_model_calls INTEGER,current_model_calls INTEGER,engine TEXT,engine_version TEXT,created_at INTEGER,updated_at INTEGER);
+            CREATE TABLE agent_runs (id TEXT PRIMARY KEY,thread_id TEXT,project_id TEXT,status TEXT,provider TEXT,model TEXT,prompt_version TEXT,max_model_calls INTEGER,current_model_calls INTEGER,engine TEXT,engine_version TEXT,route_decision_json TEXT,created_at INTEGER,updated_at INTEGER);
             CREATE TABLE agent_messages (id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,role TEXT,content TEXT,source TEXT,created_at INTEGER);").unwrap();
+        super::super::submission::create_schema(&conn).unwrap();
         let mut request: AgentRunStartArgs =
             serde_json::from_value(json!({"message":"fixture","engine":"claude_code"})).unwrap();
         let mut binding = HermesSessionBinding {
@@ -814,20 +917,71 @@ mod tests {
             executable: PathBuf::from("/unused"),
             version: "2.1.233".into(),
         });
+        let mut route =
+            super::super::routing::resolve_binding(Some("claude_code"), None, false).unwrap();
+        route.candidates = super::super::candidates::screen(&request, &route, None, |_| {
+            super::super::runtime_observations::Observation::Unknown
+        });
+        route.shadow = Some(
+            serde_json::from_value(json!({
+                "policyVersion":"shadow-general-v1", "recommendedPreparationEngine":"claude_code",
+                "automaticExecution":false, "probes":[], "elapsedMs":1
+            }))
+            .unwrap(),
+        );
         claim_run(
-            &mut conn, &request, &binding, "provider", "model", 6, &runtime,
+            &mut conn,
+            &request,
+            &binding,
+            ("provider", "model"),
+            6,
+            (&runtime, None),
+            &route,
         )
         .unwrap();
         let row: (String, String, String) = conn.query_row("SELECT t.engine,r.engine,r.engine_version FROM agent_threads t JOIN agent_runs r ON r.thread_id=t.id", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let audit: String = conn
+            .query_row(
+                "SELECT route_decision_json FROM agent_runs WHERE id='first'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let audit: Value = serde_json::from_str(&audit).unwrap();
+        assert_eq!(audit["decision"]["source"], "explicit");
+        assert_eq!(audit["decision"]["candidates"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            audit["decision"]["candidates"][2]["state"],
+            "needs_preparation"
+        );
+        assert_eq!(
+            audit["decision"]["candidates"][0]["exclusions"][0],
+            "explicit_selection"
+        );
+        assert_eq!(audit["decision"]["selectedEngine"], "claude_code");
+        assert_eq!(
+            audit["decision"]["shadow"]["recommendedPreparationEngine"],
+            "claude_code"
+        );
+        assert_eq!(audit["decision"]["shadow"]["automaticExecution"], false);
+        assert_eq!(audit["capabilities"]["runtimeVersion"], "2.1.233");
+        assert_eq!(audit["capabilities"]["transport"], "stream-json+mcp");
         assert_eq!(
             row,
             ("claude_code".into(), "claude_code".into(), "2.1.233".into())
         );
         request.thread_id = Some(binding.thread_id.clone());
         binding.run_id = "second".into();
-        assert!(
-            claim_run(&mut conn, &request, &binding, "provider", "model", 6, &runtime).is_err()
-        );
+        assert!(claim_run(
+            &mut conn,
+            &request,
+            &binding,
+            ("provider", "model"),
+            6,
+            (&runtime, None),
+            &route,
+        )
+        .is_err());
         conn.execute("UPDATE agent_runs SET status='completed'", [])
             .unwrap();
         let pi = ExecutionRuntime::Pi(runtime::Runtime {
@@ -835,7 +989,16 @@ mod tests {
             executable: PathBuf::new(),
             extension: PathBuf::new(),
         });
-        assert!(claim_run(&mut conn, &request, &binding, "provider", "model", 6, &pi).is_err());
+        assert!(claim_run(
+            &mut conn,
+            &request,
+            &binding,
+            ("provider", "model"),
+            6,
+            (&pi, None),
+            &route,
+        )
+        .is_err());
         assert_eq!(
             conn.query_row("SELECT count(*) FROM agent_runs", [], |r| r
                 .get::<_, i64>(0))
@@ -843,7 +1006,13 @@ mod tests {
             1
         );
         claim_run(
-            &mut conn, &request, &binding, "provider", "model", 6, &runtime,
+            &mut conn,
+            &request,
+            &binding,
+            ("provider", "model"),
+            6,
+            (&runtime, None),
+            &route,
         )
         .unwrap();
         assert_eq!(
@@ -854,18 +1023,123 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_claim_consumes_submission_in_the_run_and_message_transaction() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        let now = super::super::submission::live::now_ms();
+        let stamp = format!("{now:012x}");
+        let request_id = format!("{}-{}-7000-8000-000000000001", &stamp[..8], &stamp[8..]);
+        let request: AgentRunStartArgs =
+            serde_json::from_value(json!({"message":"fixture","engine":"claude_code"})).unwrap();
+        let intent = serde_json::to_value(&request).unwrap();
+        let mut submissions = super::super::submission::SubmissionStore::new(&mut conn);
+        let admitted = submissions
+            .admit(
+                super::super::submission::Request {
+                    client_request_id: &request_id,
+                    thread_id: None,
+                    engine: "claude_code",
+                    intent: &intent,
+                },
+                now,
+            )
+            .unwrap();
+        let preparing = submissions
+            .advance(
+                &admitted.submission.id,
+                0,
+                super::super::submission::State::Preparing,
+                now,
+            )
+            .unwrap();
+        let mut route =
+            super::super::routing::resolve_binding(Some("claude_code"), None, false).unwrap();
+        route.submission = Some(super::super::submission::live::Receipt {
+            id: preparing.id.clone(),
+            generation: preparing.generation,
+        });
+        let binding = HermesSessionBinding {
+            db_path: PathBuf::new(),
+            notes_dir: PathBuf::new(),
+            project_id: None,
+            thread_id: "new".into(),
+            run_id: "r".into(),
+        };
+        let runtime = ExecutionRuntime::Claude(super::super::claude::runtime::Runtime {
+            executable: PathBuf::from("/unused"),
+            version: "2.1.233".into(),
+        });
+        claim_run(
+            &mut conn,
+            &request,
+            &binding,
+            ("p", "m"),
+            6,
+            (&runtime, None),
+            &route,
+        )
+        .unwrap();
+        let bound = super::super::submission::SubmissionStore::new(&mut conn)
+            .get(&preparing.id)
+            .unwrap();
+        assert_eq!(bound.state, super::super::submission::State::Dispatching);
+        assert_eq!(bound.run_id.as_deref(), Some("r"));
+        assert_eq!(
+            conn.query_row(
+                "SELECT lower(trim(status,'\"')) FROM agent_runs WHERE id='r'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "queued"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM agent_messages WHERE run_id='r'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        let encoded = serde_json::to_value(&route).unwrap();
+        assert!(encoded.get("submission").is_none());
+        assert!(claim_run(
+            &mut conn,
+            &request,
+            &binding,
+            ("p", "m"),
+            6,
+            (&runtime, None),
+            &route,
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     #[ignore = "requires pnpm pi:bundle; only uses a local fixture, never a real provider"]
     async fn native_pi_roundtrip_approval_history_and_plan_denial() {
+        native_pi_protocol_contract("openai").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires bundled Pi; exercises Anthropic through a local HTTP fixture"]
+    async fn native_pi_anthropic_roundtrip_approval_history_and_plan_denial() {
+        native_pi_protocol_contract("anthropic").await;
+    }
+
+    async fn native_pi_protocol_contract(protocol: &'static str) {
         use std::sync::Mutex;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         struct Capture(Mutex<Vec<AgentEvent>>);
         impl EventTransport for Capture {
             fn send(&self, event: AgentEvent) -> Result<(), String> {
-                if matches!(event.payload, AgentEventPayload::ApprovalRequired { .. }) {
+                if let AgentEventPayload::ApprovalRequired { approval_id, .. } = &event.payload {
                     super::super::hermes::gateway_client::send_run_control(
                         &event.run_id,
                         super::super::hermes::gateway_client::GatewayControl::Approval {
+                            approval_id: approval_id.clone(),
                             choice: "once".into(),
                             all: false,
                         },
@@ -882,12 +1156,18 @@ mod tests {
         let root = root.canonicalize().unwrap();
         private_dir(&root.join("agent")).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let endpoint = format!(
+            "http://{}{}",
+            listener.local_addr().unwrap(),
+            if protocol == "anthropic" { "" } else { "/v1" }
+        );
+        let web = crate::agent::web::tests::fixture().await;
+        let page_url = format!("{}/page", web.0);
         let (cancel_ready, cancel_wait) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let mut cancel_ready = Some(cancel_ready);
             let mut requests = vec![];
-            for index in 0..7 {
+            for index in 0..9 {
                 let (mut stream, _) =
                     tokio::time::timeout(std::time::Duration::from_secs(20), listener.accept())
                         .await
@@ -901,9 +1181,24 @@ mod tests {
                     data.extend_from_slice(&buffer[..n]);
                     if let Some(at) = data.windows(4).position(|b| b == b"\r\n\r\n") {
                         let headers = String::from_utf8_lossy(&data[..at]).to_lowercase();
-                        assert!(headers
-                            .lines()
-                            .any(|line| line == "authorization: bearer fixture-secret"));
+                        let expected_auth = if protocol == "anthropic" {
+                            "x-api-key: fixture-secret"
+                        } else {
+                            "authorization: bearer fixture-secret"
+                        };
+                        assert!(headers.lines().any(|line| line == expected_auth));
+                        let request_line: Vec<_> =
+                            headers.lines().next().unwrap().split_whitespace().collect();
+                        assert_eq!(request_line[0], "post");
+                        let target: hyper::Uri = request_line[1].parse().unwrap();
+                        assert_eq!(
+                            target.path(),
+                            if protocol == "anthropic" {
+                                "/v1/messages"
+                            } else {
+                                "/v1/chat/completions"
+                            }
+                        );
                         let size: usize = headers
                             .lines()
                             .find_map(|line| line.strip_prefix("content-length: "))
@@ -917,12 +1212,12 @@ mod tests {
                     }
                 };
                 requests.push(request);
-                if index == 5 {
+                if index == 7 {
                     let body = r#"{"error":{"message":"fixture provider rejection","type":"invalid_request_error"}}"#;
                     stream.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
                     continue;
                 }
-                if index == 6 {
+                if index == 8 {
                     cancel_ready.take().unwrap().send(()).unwrap();
                     let mut sink = [0u8; 1];
                     let _ = tokio::time::timeout(
@@ -932,17 +1227,45 @@ mod tests {
                     .await;
                     continue;
                 }
-                let tool = index == 0 || index == 3;
-                let delta = if tool {
+                let tool = index == 0 || index == 3 || index == 5;
+                let delta = if index == 5 {
+                    json!({"role":"assistant","tool_calls":[{"index":0,"id":"call-web","type":"function","function":{"name":"webfetch","arguments":json!({"url":page_url}).to_string()}}]})
+                } else if tool {
                     json!({"role":"assistant","tool_calls":[{"index":0,"id":format!("call-{index}"),"type":"function","function":{"name":"write","arguments":json!({"path":if index==0 {"result.txt"} else {"denied.txt"},"content":"Pi fixture"}).to_string()}}]})
                 } else {
                     json!({"role":"assistant","content":"Pi fixture complete"})
                 };
-                let body = format!(
-                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                    json!({"id":"fixture","object":"chat.completion.chunk","created":0,"model":"fixture","choices":[{"index":0,"delta":delta,"finish_reason":null}]}),
-                    json!({"id":"fixture","object":"chat.completion.chunk","created":0,"model":"fixture","choices":[{"index":0,"delta":{},"finish_reason":if tool {"tool_calls"} else {"stop"}}]})
-                );
+                let body = if protocol == "anthropic" {
+                    let mut frames = vec![
+                        json!({"type":"message_start","message":{"id":format!("msg-{index}"),"type":"message","role":"assistant","model":"fixture","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}),
+                    ];
+                    if tool {
+                        let function = &delta["tool_calls"][0]["function"];
+                        frames.push(json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":format!("tool-{index}"),"name":function["name"],"input":{}}}));
+                        frames.push(json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":function["arguments"]}}));
+                    } else {
+                        frames.push(json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}));
+                        frames.push(json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Pi fixture complete"}}));
+                    }
+                    frames.push(json!({"type":"content_block_stop","index":0}));
+                    frames.push(json!({"type":"message_delta","delta":{"stop_reason":if tool {"tool_use"} else {"end_turn"},"stop_sequence":null},"usage":{"output_tokens":1}}));
+                    frames.push(json!({"type":"message_stop"}));
+                    frames
+                        .iter()
+                        .map(|frame| {
+                            format!(
+                                "event: {}\ndata: {frame}\n\n",
+                                frame["type"].as_str().unwrap()
+                            )
+                        })
+                        .collect::<String>()
+                } else {
+                    format!(
+                        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                        json!({"id":"fixture","object":"chat.completion.chunk","created":0,"model":"fixture","choices":[{"index":0,"delta":delta,"finish_reason":null}]}),
+                        json!({"id":"fixture","object":"chat.completion.chunk","created":0,"model":"fixture","choices":[{"index":0,"delta":{},"finish_reason":if tool {"tool_calls"} else {"stop"}}]})
+                    )
+                };
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
             }
             requests
@@ -957,7 +1280,7 @@ mod tests {
             runtime: ExecutionRuntime::Pi(runtime),
             provider: ProviderSnapshot {
                 id: "fixture".into(),
-                protocol: "openai".into(),
+                protocol: protocol.into(),
                 base_url: endpoint,
                 model: "fixture".into(),
                 models: vec!["fixture".into()],
@@ -971,6 +1294,8 @@ mod tests {
             prompt: "First fixture request".into(),
             images: vec![],
             scope: tools::Scope {
+                read_lease: None,
+                readonly: None,
                 workspace: root.clone(),
                 read_paths: vec![],
                 workcopy: None,
@@ -1019,6 +1344,17 @@ mod tests {
             .await
             .unwrap();
         assert!(!root.join("denied.txt").exists());
+        capture.0.lock().unwrap().clear();
+        prepared.prompt = "Read the webpage in Plan mode".into();
+        transport::run(&prepared, &binding, &events, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!capture
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.payload, AgentEventPayload::ApprovalRequired { .. })));
         prepared.prompt = "Provider rejection fixture".into();
         let failure = transport::run(&prepared, &binding, &events, &CancellationToken::new())
             .await
@@ -1048,6 +1384,24 @@ mod tests {
             .any(|m| m["role"] == "user"
                 && m["content"].to_string().contains("First fixture request")));
         assert!(requests[4].to_string().contains("计划模式禁止"));
+        assert!(requests[6]["messages"]
+            .to_string()
+            .contains("WEB_FIXTURE_OK"));
+        let names: Vec<_> = requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                if protocol == "anthropic" {
+                    t["name"].as_str()
+                } else {
+                    t["function"]["name"].as_str()
+                }
+            })
+            .collect();
+        for name in ["webfetch", "websearch", "news_search"] {
+            assert!(names.contains(&name));
+        }
         for path in [
             prepared.session.clone(),
             prepared.home.join("auth.json"),

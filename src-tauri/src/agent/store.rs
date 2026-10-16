@@ -117,6 +117,7 @@ pub const SNAPSHOT_MESSAGE_TAIL: usize = 50;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSnapshot {
+    pub routing: Option<super::routing::RoutingSummary>,
     pub run_id: String,
     pub thread_id: String,
     /// Run 状态（来自 agent_runs 表，不经事件推断）
@@ -150,6 +151,16 @@ impl RunStore {
     /// 新建 RunStore（传入已打开的 SQLite 连接）
     pub fn new(conn: Connection) -> Self {
         Self { conn }
+    }
+
+    pub fn require_user_thread(&self, id: &str) -> Result<(), RunStoreError> {
+        super::orchestration::sessions::require_user_thread(&self.conn, id)
+            .map_err(RunStoreError::Generic)
+    }
+
+    pub fn require_user_run(&self, id: &str) -> Result<(), RunStoreError> {
+        super::orchestration::sessions::require_user_run(&self.conn, id)
+            .map_err(RunStoreError::Generic)
     }
 
     // ------------------- Thread CRUD -------------------
@@ -203,10 +214,29 @@ impl RunStore {
         Ok(())
     }
 
+    // A completed native root does not imply that its whole workflow succeeded.
+    fn thread_status_sql(&self) -> Result<&'static str, RunStoreError> {
+        if !super::orchestration::supervisor::installed(&self.conn)? {
+            return Ok("status");
+        }
+        Ok(
+            r#"CASE (SELECT state FROM agent_workflows WHERE root_run_id=agent_threads.latest_run_id)
+            WHEN 'succeeded' THEN '"completed"'
+            WHEN 'cancelled' THEN '"cancelled"'
+            WHEN 'partial' THEN '"failed"'
+            WHEN 'failed' THEN '"failed"'
+            WHEN 'running' THEN '"running"'
+            WHEN 'cancelling' THEN '"running"'
+            WHEN 'recovering' THEN '"running"'
+            ELSE status END"#,
+        )
+    }
+
     /// 获取指定 Thread
     pub fn get_thread(&self, id: &str) -> Result<Option<AgentThread>, RunStoreError> {
-        let sql = "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine FROM agent_threads WHERE id = ?1";
-        let mut stmt = self.conn.prepare(sql)?;
+        let status = self.thread_status_sql()?;
+        let sql = format!("SELECT id, title, {status}, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine FROM agent_threads WHERE id = ?1");
+        let mut stmt = self.conn.prepare(&sql)?;
         let row = stmt
             .query_row(rusqlite::params![id], Self::map_thread_row)
             .optional()?;
@@ -264,13 +294,14 @@ impl RunStore {
                  AND trim(title) NOT IN ('新会话', '新对话', '未命名会话', '新任务', '未命名任务')"
             }
         };
+        let status = self.thread_status_sql()?;
         let sql = match project_id {
             Some(_pid) => format!(
-                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
+                "SELECT id, title, {status}, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
                  FROM agent_threads WHERE project_id = ?1 AND {scope_sql} ORDER BY updated_at DESC"
             ),
             None => format!(
-                "SELECT id, title, status, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
+                "SELECT id, title, {status}, project_id, latest_run_id, created_at, updated_at, closed_at, archived_at, pinned_at, collection_id, engine \
                  FROM agent_threads WHERE project_id IS NULL AND {scope_sql} ORDER BY updated_at DESC"
             ),
         };
@@ -290,6 +321,7 @@ impl RunStore {
     /// 无任何用户对话的空会话直接硬删，不进历史；返回 `true`=进历史，`false`=已丢弃。
     /// 进历史前若标题仍为占位，则按首条 Query（及回复）生成明确标题。
     pub fn close_thread(&self, id: &str, now_ms: u64) -> Result<bool, RunStoreError> {
+        self.require_user_thread(id)?;
         let msgs = self.get_messages(id)?;
         let has_user = msgs
             .iter()
@@ -318,29 +350,28 @@ impl RunStore {
 
     /// 硬删 Thread（CASCADE 清 messages；runs/events 显式清理防孤儿）
     pub fn delete_thread(&self, id: &str) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        // The Thread guard may reject deletion while preparation is in flight.
+        // Keep every child deletion in the same transaction so rejection is lossless.
         let runs = self.list_runs_by_thread(id)?;
+        tx.execute("DELETE FROM agent_threads WHERE id=?1", [id])?;
         for run in &runs {
-            let _ = self
-                .conn
-                .execute("DELETE FROM agent_run_events WHERE run_id = ?1", [&run.id]);
-            let _ = self
-                .conn
-                .execute("DELETE FROM agent_tool_calls WHERE run_id = ?1", [&run.id]);
-            let _ = self
-                .conn
-                .execute("DELETE FROM agent_approvals WHERE run_id = ?1", [&run.id]);
-            let _ = self
-                .conn
-                .execute("DELETE FROM agent_messages WHERE run_id = ?1", [&run.id]);
-            let _ = self
-                .conn
-                .execute("DELETE FROM agent_runs WHERE id = ?1", [&run.id]);
+            for table in [
+                "agent_run_events",
+                "agent_tool_calls",
+                "agent_approvals",
+                "agent_messages",
+            ] {
+                tx.execute(&format!("DELETE FROM {table} WHERE run_id=?1"), [&run.id])?;
+            }
+            tx.execute("DELETE FROM agent_runs WHERE id=?1", [&run.id])?;
         }
-        let _ = self
-            .conn
-            .execute("DELETE FROM agent_messages WHERE thread_id = ?1", [id]);
-        self.conn
-            .execute("DELETE FROM agent_threads WHERE id = ?1", [id])?;
+        tx.execute("DELETE FROM agent_messages WHERE thread_id=?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -350,6 +381,7 @@ impl RunStore {
         title: &str,
         now_ms: u64,
     ) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
         let trimmed = title.trim();
         if trimmed.is_empty() {
             return Ok(());
@@ -404,6 +436,7 @@ impl RunStore {
 
     /// 从历史恢复为活跃 tab
     pub fn reopen_thread(&self, id: &str, now_ms: u64) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
         self.conn.execute(
             "UPDATE agent_threads SET closed_at = NULL, updated_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
             rusqlite::params![now_ms, id],
@@ -413,6 +446,7 @@ impl RunStore {
 
     /// 归档：UI 不可见，待 TTL 硬删
     pub fn archive_thread(&self, id: &str, now_ms: u64) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
         self.conn.execute(
             "UPDATE agent_threads SET archived_at = ?1, closed_at = COALESCE(closed_at, ?1), updated_at = ?1 WHERE id = ?2",
             rusqlite::params![now_ms, id],
@@ -427,6 +461,7 @@ impl RunStore {
         pinned: bool,
         now_ms: u64,
     ) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
         let pinned_at = if pinned { Some(now_ms) } else { None };
         self.conn.execute(
             "UPDATE agent_threads SET pinned_at = ?1 WHERE id = ?2",
@@ -492,6 +527,7 @@ impl RunStore {
         id: &str,
         collection_id: Option<&str>,
     ) -> Result<(), RunStoreError> {
+        self.require_user_thread(id)?;
         if let Some(cid) = collection_id {
             let exists: i64 = self.conn.query_row(
                 "SELECT COUNT(1) FROM thread_collections WHERE id = ?1",
@@ -518,12 +554,24 @@ impl RunStore {
         }
         let ttl_ms = (ttl_days as u64).saturating_mul(24 * 60 * 60 * 1000);
         let cutoff = now_ms.saturating_sub(ttl_ms);
-        let n = self.conn.execute(
-            r#"DELETE FROM agent_threads
-               WHERE archived_at IS NOT NULL AND archived_at < ?1"#,
-            rusqlite::params![cutoff],
-        )?;
-        Ok(n)
+        let ids = self
+            .conn
+            .prepare(
+                "SELECT id FROM agent_threads WHERE archived_at IS NOT NULL AND archived_at < ?1",
+            )?
+            .query_map([cutoff], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut deleted = 0;
+        for id in ids {
+            if super::orchestration::sessions::is_internal(&self.conn, &id)?
+                || super::orchestration::sessions::root_busy(&self.conn, &id)?
+            {
+                continue;
+            }
+            self.delete_thread(&id)?;
+            deleted += 1;
+        }
+        Ok(deleted)
     }
 
     /// 更新 Thread 状态
@@ -618,16 +666,31 @@ impl RunStore {
         engine: &str,
         create: impl FnOnce() -> Result<(), RunStoreError>,
     ) -> Result<(), RunStoreError> {
+        self.with_submission_claim(thread_id, engine, None, create)
+    }
+
+    pub(crate) fn with_submission_claim(
+        &self,
+        thread_id: &str,
+        engine: &str,
+        receipt: Option<&super::submission::live::Receipt>,
+        create: impl FnOnce() -> Result<(), RunStoreError>,
+    ) -> Result<(), RunStoreError> {
         let tx = self.conn.unchecked_transaction()?;
         // Acquire the write lock before inspecting the binding or active Runs.
         tx.execute(
             "UPDATE agent_threads SET engine=engine WHERE id=?1",
             [thread_id],
         )?;
+        super::submission::live::check_claim(&tx, thread_id, receipt)
+            .map_err(|e| RunStoreError::Generic(e.to_string()))?;
         let thread = self
             .get_thread(thread_id)?
             .ok_or_else(|| RunStoreError::Generic("会话不存在".into()))?;
-        if thread.latest_run_id.is_some() && thread.engine != engine {
+        if (thread.latest_run_id.is_some()
+            || self.external_session_id_for_thread(thread_id)?.is_some())
+            && thread.engine != engine
+        {
             return Err(RunStoreError::Generic("已有会话不能切换引擎".into()));
         }
         let active: bool = tx.query_row(
@@ -647,7 +710,27 @@ impl RunStore {
         Ok(())
     }
 
-    /// 根据 run_id 获取 Run
+    pub(crate) fn bind_submission(
+        &self,
+        run_id: &str,
+        receipt: Option<&super::submission::live::Receipt>,
+        now: u64,
+    ) -> Result<(), RunStoreError> {
+        super::submission::live::bind_claim(&self.conn, receipt, run_id, now as i64)
+            .map_err(|e| RunStoreError::Generic(e.to_string()))
+    }
+
+    /// Persist route evidence within the caller's Run claim transaction.
+    pub(crate) fn record_route(
+        &self,
+        run_id: &str,
+        decision: &super::routing::RouteDecision,
+        snapshot: &super::routing::CapabilitySnapshot,
+    ) -> Result<(), RunStoreError> {
+        super::routing::persist(&self.conn, run_id, decision, snapshot)
+            .map_err(RunStoreError::Generic)
+    }
+
     pub fn get_run(&self, id: &str) -> Result<Option<DBAgentRun>, RunStoreError> {
         let sql = "SELECT id, thread_id, project_id, status, provider, model, prompt_version,
                            max_model_calls, current_model_calls, engine, engine_version,
@@ -692,6 +775,34 @@ impl RunStore {
                 run_id,
             ],
         )?;
+        if matches!(
+            status,
+            RunStatus::Completed
+                | RunStatus::Failed
+                | RunStatus::Cancelled
+                | RunStatus::Interrupted
+        ) && self.conn.is_autocommit()
+            && super::orchestration::supervisor::installed(&self.conn)?
+        {
+            let owned: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_executions WHERE run_id=?1)",
+                [run_id],
+                |row| row.get(0),
+            )?;
+            if owned {
+                if let Some(path) = self.conn.path().filter(|path| !path.is_empty()) {
+                    let mut conn = Connection::open(path)?;
+                    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+                    let runs = super::orchestration::supervisor::reconcile(
+                        &mut conn,
+                        run_id,
+                        now_ms as i64,
+                    )
+                    .map_err(RunStoreError::Generic)?;
+                    super::orchestration::supervisor::signal(runs);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1165,7 +1276,13 @@ impl RunStore {
         }
         let tool_calls = self.get_tool_calls(run_id)?;
         let pending_approvals = self.get_pending_approvals(run_id)?;
+        let raw: Option<String> = self.conn.query_row(
+            "SELECT route_decision_json FROM agent_runs WHERE id=?1",
+            [run_id],
+            |r| r.get(0),
+        )?;
         Ok(Some(RunSnapshot {
+            routing: raw.as_deref().and_then(super::routing::summary),
             run_id: run.id.clone(),
             thread_id: run.thread_id.clone(),
             run_status: run.status,
@@ -1317,6 +1434,7 @@ mod tests {
             model TEXT NOT NULL DEFAULT '', prompt_version TEXT,
             max_model_calls INTEGER NOT NULL DEFAULT 6, current_model_calls INTEGER NOT NULL DEFAULT 0,
             engine TEXT NOT NULL DEFAULT 'hermes', engine_version TEXT NOT NULL DEFAULT '0.20',
+            route_decision_json TEXT,
             created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS agent_messages (
@@ -1350,7 +1468,50 @@ mod tests {
     fn test_store() -> RunStore {
         let conn = mem_conn();
         conn.execute_batch(AGENT_SCHEMA_DDL).unwrap();
+        crate::agent::submission::create_schema(&conn).unwrap();
+        crate::agent::submission::live::install_triggers(&conn).unwrap();
         RunStore::new(conn)
+    }
+
+    #[test]
+    fn thread_summary_uses_latest_workflow_outcome_without_rewriting_run() {
+        let store = test_store();
+        store.create_thread("t", "task", None, 1).unwrap();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TABLE agent_workflows(root_run_id TEXT PRIMARY KEY,state TEXT);
+            UPDATE agent_threads SET latest_run_id='r',status='\"completed\"' WHERE id='t';
+            INSERT INTO agent_workflows VALUES('r','cancelled');",
+            )
+            .unwrap();
+        for (state, expected) in [
+            ("cancelled", ThreadStatus::Cancelled),
+            ("partial", ThreadStatus::Failed),
+            ("recovering", ThreadStatus::Running),
+            ("succeeded", ThreadStatus::Completed),
+        ] {
+            store
+                .conn
+                .execute("UPDATE agent_workflows SET state=?1", [state])
+                .unwrap();
+            assert_eq!(store.get_thread("t").unwrap().unwrap().status, expected);
+            assert_eq!(
+                store
+                    .list_threads(None, crate::agent::types::ThreadListScope::Active)
+                    .unwrap()[0]
+                    .status,
+                expected
+            );
+        }
+        store
+            .conn
+            .execute("UPDATE agent_threads SET latest_run_id='new'", [])
+            .unwrap();
+        assert_eq!(
+            store.get_thread("t").unwrap().unwrap().status,
+            ThreadStatus::Completed
+        );
     }
 
     #[test]
@@ -1412,6 +1573,51 @@ mod tests {
             )))
             .is_err());
         assert_eq!(store.get_thread("draft").unwrap().unwrap().engine, "hermes");
+    }
+
+    #[test]
+    fn route_audit_commits_with_run_and_rejects_session_only_rebinding() {
+        use crate::agent::{registry::EngineId, routing};
+        let store = test_store();
+        store.create_thread("t-route", "任务", None, 1).unwrap();
+        store
+            .bind_thread_external_session("t-route", "native-id", 1)
+            .unwrap();
+        assert!(store.with_run_claim("t-route", "pi", || Ok(())).is_err());
+        assert!(routing::resolve_from_store(&store, Some("t-route"), Some("pi")).is_err());
+        let decision = routing::resolve_from_store(&store, Some("t-route"), None).unwrap();
+        let snapshot = routing::CapabilitySnapshot::new(
+            EngineId::Hermes,
+            None,
+            routing::PreparationEvidence::HermesConfigurationOnly,
+            None,
+            1,
+        );
+        let create = || {
+            store.create_run("r-route", "t-route", None, "p", "m", None, 6, 1)?;
+            store.set_run_engine("r-route", "hermes", "protocol")?;
+            store.record_route("r-route", &decision, &snapshot)
+        };
+        assert!(store
+            .with_run_claim("t-route", "hermes", || {
+                create()?;
+                Err(RunStoreError::Generic("later claim failure".into()))
+            })
+            .is_err());
+        assert!(store.get_run("r-route").unwrap().is_none());
+        store.with_run_claim("t-route", "hermes", create).unwrap();
+        let raw: String = store
+            .conn
+            .query_row(
+                "SELECT route_decision_json FROM agent_runs WHERE id='r-route'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let audit: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(audit["decision"]["source"], "session_affinity");
+        assert!(audit["capabilities"]["runtimeVersion"].is_null());
+        assert!(audit["capabilities"]["hostTools"].is_null());
     }
 
     #[test]

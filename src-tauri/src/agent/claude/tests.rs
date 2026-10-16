@@ -19,10 +19,11 @@ use tokio_util::sync::CancellationToken;
 struct Capture(Mutex<Vec<AgentEvent>>);
 impl EventTransport for Capture {
     fn send(&self, event: AgentEvent) -> Result<(), String> {
-        if matches!(event.payload, AgentEventPayload::ApprovalRequired { .. }) {
+        if let AgentEventPayload::ApprovalRequired { approval_id, .. } = &event.payload {
             crate::agent::hermes::gateway_client::send_run_control(
                 &event.run_id,
                 crate::agent::hermes::gateway_client::GatewayControl::Approval {
+                    approval_id: approval_id.clone(),
                     choice: "once".into(),
                     all: false,
                 },
@@ -58,6 +59,7 @@ fn stream(tool: Option<Value>, text: &str) -> String {
 }
 
 struct Fixture {
+    page_url: String,
     requests: Mutex<Vec<Value>>,
     cancellation_ready: tokio::sync::Notify,
 }
@@ -96,7 +98,9 @@ async fn model(
         3 => stream(None, "history complete"),
         4 => stream(Some(json!({"name":"mcp__sophonote__write","input":{"path":"denied.txt","content":"must not exist"}})), ""),
         5 => stream(None, "plan denied"),
-        6 => return Ok(Response::builder().status(400).header("content-type","application/json").body(Full::new(Bytes::from("{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"fixture rejected\"}}"))).unwrap()),
+        6 => stream(Some(json!({"name":"mcp__sophonote__webfetch","input":{"url":fixture.page_url}})), ""),
+        7 => stream(None, "web complete"),
+        8 => return Ok(Response::builder().status(400).header("content-type","application/json").body(Full::new(Bytes::from("{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"fixture rejected\"}}"))).unwrap()),
         _ => { fixture.cancellation_ready.notify_one(); std::future::pending::<()>().await; unreachable!() },
     };
     Ok(Response::builder()
@@ -116,7 +120,9 @@ async fn native_claude_tools_history_plan_error_and_cancel() {
     let root = root.canonicalize().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let web = crate::agent::web::tests::fixture().await;
     let fixture = Arc::new(Fixture {
+        page_url: format!("{}/page", web.0),
         requests: Mutex::new(vec![]),
         cancellation_ready: tokio::sync::Notify::new(),
     });
@@ -163,6 +169,8 @@ async fn native_claude_tools_history_plan_error_and_cancel() {
         prompt: "Write the fixture file".into(),
         images: vec![],
         scope: tools::Scope {
+            read_lease: None,
+            readonly: None,
             workspace: root.clone(),
             read_paths: vec![],
             workcopy: None,
@@ -222,6 +230,22 @@ async fn native_claude_tools_history_plan_error_and_cancel() {
     .unwrap();
     assert_eq!(third.0, "plan denied");
     assert!(!root.join("denied.txt").exists());
+    capture.0.lock().unwrap().clear();
+    prepared.prompt = "Read the webpage in Plan mode".into();
+    let web_result = tokio::time::timeout(
+        Duration::from_secs(35),
+        transport::run(&prepared, &binding, &events, &cancel),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(web_result.0, "web complete");
+    assert!(!capture
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| matches!(e.payload, AgentEventPayload::ApprovalRequired { .. })));
     let error = tokio::time::timeout(
         Duration::from_secs(35),
         transport::run(&prepared, &binding, &events, &cancel),
@@ -257,6 +281,12 @@ async fn native_claude_tools_history_plan_error_and_cancel() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
+    assert!(requests[7]["messages"]
+        .to_string()
+        .contains("WEB_FIXTURE_OK"));
+    assert!(names.contains(&"mcp__sophonote__websearch"));
+    assert!(names.contains(&"mcp__sophonote__webfetch"));
+    assert!(names.contains(&"mcp__sophonote__news_search"));
     assert!(names.contains(&"mcp__sophonote__write"));
     assert!(!names
         .iter()

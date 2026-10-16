@@ -72,6 +72,8 @@ pub struct RunEnvelope {
     /// 用户在当前 SophoNote 会话中明确授权的本地工作目录。Hermes Session 以此
     /// 作为 cwd，文件、终端与 Git 工具因此共享同一个真实仓库工作区。
     pub hermes_workspace_root: Option<String>,
+    /// Immutable Host scope; never serialized into model input or native history.
+    pub hermes_host_scope: Option<crate::agent::pi::tools::Scope>,
     /// Hermes Gateway 原生附件。正式 Surface 不把附件内容拼进 system/user 提示词。
     pub hermes_attachments: Vec<crate::agent::attachments::RunAttachmentInput>,
     /// 用户界面明确显示的当前文档范围。Host 在发送时捕获编辑器草稿，Gateway

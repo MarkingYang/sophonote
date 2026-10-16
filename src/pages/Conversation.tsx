@@ -12,7 +12,6 @@ import ProjectExtensions from '../components/aistudio/ProjectExtensions';
 const titleOf = (thread: AgentThread) => isPlaceholderThreadTitle(thread.title) ? '新任务' : thread.title;
 const statusOf = (thread: AgentThread) => ({ completed: '已完成', failed: '失败', cancelled: '已取消', running: '待继续' })[thread.status] ?? '历史';
 const timeOf = (ms: number) => new Date(ms).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const engineOf = (thread: AgentThread) => ({ hermes: 'Hermes', pi: 'Pi', claude_code: 'Claude Code', opencode: 'OpenCode' })[thread.engine ?? 'hermes'];
 const buttonClass = 'rounded-md p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--bg-surface)] hover:text-[var(--accent)] disabled:opacity-40';
 
 /** 项目组织目录和任务；Thread/Run/原生历史继续由 agentStore 唯一管理。 */
@@ -157,7 +156,7 @@ export default function Conversation() {
   const row = (thread: AgentThread) => <div key={thread.id} className="sn-task-row group relative flex items-start" data-selected={current?.id === thread.id || undefined}>
     <button type="button" onClick={() => void openThread(thread)} aria-current={current?.id === thread.id ? 'page' : undefined} className="sn-task-open min-w-0 flex-1 text-left">
       <p className={`line-clamp-2 text-[13px] leading-5 ${current?.id === thread.id ? 'font-semibold text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}>{titleOf(thread)}</p>
-      <p className="mt-1 truncate text-[11px] text-[var(--text-tertiary)]">{running[thread.id] ? `${engineOf(thread)} 正在执行` : `${statusOf(thread)} · ${timeOf(thread.updatedAt)}`}</p>
+      <p className="mt-1 truncate text-[11px] text-[var(--text-tertiary)]">{running[thread.id] ? '正在处理…' : `${statusOf(thread)} · ${timeOf(thread.updatedAt)}`}</p>
     </button>
     <button type="button" title={`任务操作：${titleOf(thread)}`} aria-expanded={menuId === thread.id} onClick={() => setMenuId(menuId === thread.id ? null : thread.id)} className={`${buttonClass} mt-1 opacity-0 group-hover:opacity-100 focus:opacity-100 ${menuId === thread.id ? 'opacity-100' : ''}`}><MoreHorizontal size={14} /></button>
     {menuId === thread.id && <>

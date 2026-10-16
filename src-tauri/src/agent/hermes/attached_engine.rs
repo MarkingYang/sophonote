@@ -174,6 +174,14 @@ impl AgentEngine for AttachedHermesEngine {
         }
 
         let mut gateway = HermesGatewayConnection::connect(&self.endpoint).await?;
+        if envelope.hermes_host_scope.is_some() {
+            let policy = gateway.call("sophonote.host_tools", json!({})).await?;
+            if policy["version"] != 1 || policy["required"] != true {
+                return Err(EngineError::Setup(
+                    "当前运行时缺少宿主权限协议，请更新运行时后重试".into(),
+                ));
+            }
+        }
         let (runtime_session_id, stored_session_id) = open_session(&mut gateway, &envelope).await?;
 
         if let Some(binding) = &envelope.hermes_session_binding {
@@ -307,13 +315,43 @@ impl AgentEngine for AttachedHermesEngine {
             .await?
         };
 
+        let (host_sender, host_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let host_tools = if let Some(mut scope) = envelope.hermes_host_scope.clone() {
+            if let Some(context) = &host_patch_context {
+                scope.workcopy = Some(
+                    context
+                        .staged_path
+                        .canonicalize()
+                        .map_err(|_| EngineError::Setup("文档工作副本不可访问".into()))?,
+                );
+            }
+            let events = emitter
+                .clone()
+                .ok_or_else(|| EngineError::Setup("缺少工具审计通道".into()))?;
+            Some(
+                crate::agent::claude::tools_server::start_with_controls(
+                    scope,
+                    events,
+                    host_receiver,
+                    envelope.cancel.clone(),
+                )
+                .await
+                .map_err(EngineError::Setup)?,
+            )
+        } else {
+            None
+        };
+        let policy = host_tools
+            .as_ref()
+            .map(|server| json!({"version":1,"url":server.url,"bearer":server.bearer}));
         gateway
             .call(
                 "prompt.submit",
                 json!({
                     "session_id": runtime_session_id,
                     "text": prompt_text,
-                    "surface": "sophonote"
+                    "surface": "sophonote",
+                    "sophonote_host_tools": policy
                 }),
             )
             .await?;
@@ -325,6 +363,7 @@ impl AgentEngine for AttachedHermesEngine {
             emitter,
             envelope.cancel.clone(),
             host_patch_context,
+            host_tools.as_ref().map(|_| host_sender),
         )
         .await?;
 
@@ -424,6 +463,7 @@ pub async fn observe_recovered_turn(
         Some(emitter),
         cancel,
         None,
+        None,
     )
     .await
 }
@@ -501,10 +541,12 @@ async fn observe_gateway_turn(
     emitter: Option<Arc<EventEmitter>>,
     cancel: CancellationToken,
     host_patch_context: Option<HostPatchContext>,
+    host_controls: Option<tokio::sync::mpsc::UnboundedSender<GatewayControl>>,
 ) -> Result<SpikeRunReport, EngineError> {
     let mut mapper = HermesEventMapper::default();
     let mut report = empty_report();
     let mut final_answer = String::new();
+    let mut native_approval_id: Option<String> = None;
     let control_run_id = emitter
         .as_ref()
         .map(|emitter| emitter.run_id().to_string())
@@ -540,7 +582,15 @@ async fn observe_gateway_turn(
             control = controls.recv() => {
                 let Some(control) = control else { continue; };
                 match control {
-                    GatewayControl::Approval { choice, all } => {
+                    GatewayControl::Approval { approval_id, choice, all } => {
+                        if let Some(sender) = &host_controls {
+                            let _ = sender.send(GatewayControl::Approval { approval_id, choice, all: false });
+                            continue;
+                        }
+                        if native_approval_id.as_deref() != Some(approval_id.as_str()) {
+                            continue;
+                        }
+                        native_approval_id = None;
                         gateway.call("approval.respond", json!({
                             "session_id": runtime_session_id,
                             "choice": choice,
@@ -593,7 +643,13 @@ async fn observe_gateway_turn(
                     } else { None };
                 }
 
-                if let Some(mapped) = mapper.map_gateway(ty, &payload) {
+                if let Some(mut mapped) = mapper.map_gateway(ty, &payload) {
+                    // The legacy Gateway has no request identity. Mint a Surface identity
+                    // for this notification so a previous card cannot approve the next one.
+                    if let AgentEventPayload::ApprovalRequired { approval_id, .. } = &mut mapped {
+                        *approval_id = uuid::Uuid::new_v4().to_string();
+                        native_approval_id = Some(approval_id.clone());
+                    }
                     if let AgentEventPayload::MessageCompleted { text } = &mapped {
                         final_answer = text.clone();
                     }

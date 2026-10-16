@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, ChevronDown, Clock, Loader2, X } from 'lucide-react';
 import type { AssistantPhase } from '../../services/agentMessagePhase';
 import type { ToolCard } from '../../services/agentToolCards';
@@ -12,7 +12,8 @@ function duration(ms: number): string {
 }
 
 /** 展示事件进展；无更新只提示等待，不推断引擎终态。 */
-export default function ProcessRail({ phase, durationMs, processCards, startedAt, lastEventAt }: {
+export default function ProcessRail({ phase, durationMs, processCards, startedAt, lastEventAt, actions }: {
+  actions?: ReactNode;
   phase: AssistantPhase;
   durationMs?: number;
   processCards: ToolCard[];
@@ -31,15 +32,16 @@ export default function ProcessRail({ phase, durationMs, processCards, startedAt
   }, [running]);
 
   const steps = useMemo(() => {
-    const grouped = new Map<string, { label: string; count: number; status: ToolCard['status']; names: Set<string> }>();
+    const grouped = new Map<string, { label: string; count: number; status: ToolCard['status']; updatedAt: number }>();
     for (const card of processCards) {
       const summary = toolStepSummary(card);
       const label = `${toolDisplayName(card.name)}${summary ? ` · ${summary}` : ''}`;
       const existing = grouped.get(label);
-      if (!existing) grouped.set(label, { label, count: 1, status: card.status, names: new Set([card.name]) });
+      const updatedAt = card.completedAt ?? card.startedAt;
+      if (!existing) grouped.set(label, { label, count: 1, status: card.status, updatedAt });
       else {
         existing.count++;
-        existing.names.add(card.name);
+        existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
         if (card.status === 'running' || (card.status === 'failed' && existing.status !== 'running')) existing.status = card.status;
       }
     }
@@ -55,34 +57,46 @@ export default function ProcessRail({ phase, durationMs, processCards, startedAt
     : waiting ? '暂未收到新进展'
     : currentStep ? `正在${toolDisplayName(currentStep.name)}`
     : phase === 'answering' ? '正在生成回复'
-    : processCards.length > 0 ? '等待模型回复' : '正在理解任务';
-  const open = steps.length > 0 && (userOpen ?? phase === 'thinking');
+    : processCards.length > 0 ? '正在整理结果' : '正在理解任务';
+  const open = steps.length > 0 && (userOpen ?? false);
+  // 紧凑预览保留仍在执行的操作，再补最近完成的操作；完整过程保留原顺序。
+  const recentSteps = [...steps].sort((a, b) =>
+    Number(b.status === 'running') - Number(a.status === 'running') || b.updatedAt - a.updatedAt
+  ).slice(0, 3).sort((a, b) => a.updatedAt - b.updatedAt);
+  const visibleSteps = open ? steps : running ? recentSteps : [];
+  const canExpand = running ? steps.length > 3 : steps.length > 0;
 
   return <section className="hb-chat-process" role="region" aria-label="执行进度" data-waiting={waiting || undefined}>
-    <button type="button" className="hb-chat-process-summary" disabled={steps.length === 0}
-      onClick={() => setUserOpen(!open)} aria-expanded={steps.length > 0 ? open : undefined}>
+    <div className="sn-answer-actions">
+    <button type="button" className="hb-chat-process-summary" disabled={!canExpand}
+      onClick={() => setUserOpen(!open)} aria-expanded={canExpand ? open : undefined}>
       {waiting ? <Clock size={13} className="shrink-0" />
         : running ? <Loader2 size={13} className="shrink-0 animate-spin" />
         : phase === 'error' ? <X size={13} className="shrink-0 text-[var(--danger)]" />
         : <Check size={13} className="shrink-0 text-[var(--success)]" />}
-      <span className="hb-chat-process-label">{label}</span>
+      <span className="hb-chat-process-label" role="status" aria-live="polite">{label}</span>
       <span className="hb-chat-process-metrics">
-        {processCards.length > 0 && <span>{processCards.length} 次操作</span>}
         {elapsedMs != null && <span>{duration(elapsedMs)}</span>}
       </span>
-      {steps.length > 0 && <ChevronDown size={12} className={`shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />}
+      {canExpand && <><span className="hb-chat-process-toggle-label">{running ? open ? '只看最近进展' : '展开全部过程' : '查看过程'}</span>
+        <ChevronDown size={12} className={`shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} /></>}
     </button>
+    {actions}
+    </div>
     {waiting && <p className="hb-chat-process-wait" role="status">
       已 {duration(idleMs)} 未收到更新。可查看待确认事项；持续无响应时可停止任务后重试。
     </p>}
-    {open && <ol className="hb-chat-process-steps">{steps.map((step) => <li key={step.label}
-      className="flex min-w-0 items-start gap-2" title={[...step.names].join('、')}>
+    {visibleSteps.length > 0 && <div className="hb-chat-process-detail" data-live={running || undefined}>
+      {open && <p className="hb-chat-process-count">共 {processCards.length} 次操作</p>}
+      <ol className="hb-chat-process-steps" aria-label={open ? '全部过程' : '最近进展'}>{visibleSteps.map((step) => <li key={step.label}
+      className="flex min-w-0 items-start gap-2" data-active={running && step.status === 'running' || undefined}>
       {step.status === 'running' && running ? <Loader2 size={11} className="mt-0.5 shrink-0 animate-spin" />
         : step.status === 'failed' ? <X size={11} className="mt-0.5 shrink-0 text-[var(--danger)]" />
         : step.status === 'running' ? <Clock size={11} className="mt-0.5 shrink-0" />
         : <Check size={11} className="mt-0.5 shrink-0 text-[var(--success)]" />}
       <span className="min-w-0 flex-1 break-words">{step.label}</span>
       {step.count > 1 && <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{step.count} 次</span>}
-    </li>)}</ol>}
+      <span className="hb-chat-process-step-state">{step.status === 'completed' ? '已完成' : step.status === 'failed' ? '失败' : running ? '进行中' : '未确认'}</span>
+    </li>)}</ol></div>}
   </section>;
 }

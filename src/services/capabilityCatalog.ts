@@ -27,6 +27,9 @@ export interface CapabilityEntry {
 }
 
 const HOST_DESCRIPTIONS: Record<string, string> = {
+  websearch: '搜索实时网页并返回来源链接；计划模式下可直接使用。',
+  webfetch: '抓取网页正文与链接；无需命令审批，支持计划模式。',
+  news_search: '按当前日期查询近期新闻，返回来源与可用的发布时间。',
   read: '读取授权工作区或显式附件中的文本文件。',
   ls: '查看授权目录中的文件。',
   write: '通过宿主权限检查写入文件；笔记工作副本提交为待审阅修改。',

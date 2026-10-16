@@ -2,324 +2,294 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "SophoNote · 三引擎架构",
+    "title": "SophoNote · 前端、引擎与长期记忆",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "viewBox": [
-      1370,
-      820
-    ],
+    "viewBox": [1360, 700],
     "repository": {
       "url": "https://github.com/MarkingYang/sophonote",
-      "revision": "c533efe6c1baac876e591706e2367d475f2e1cf6"
-    }
+      "revision": "acc62482e6576a113a3e7b37838b4688d7f78359"
+    },
+    "views": [
+      {
+        "id": "frontend-stack",
+        "label": "前端分层",
+        "focus": ["shell", "surfaces", "stores", "ipc"],
+        "note": "WKWebView 只渲染；四 Store 按生命周期隔离；副作用只经 tauri.ts。"
+      },
+      {
+        "id": "main-path",
+        "label": "主执行路径",
+        "focus": ["surfaces", "ipc", "host", "pi"],
+        "note": "会话内核经契约层进入 Rust Host，再由所选引擎执行。"
+      },
+      {
+        "id": "long-memory",
+        "label": "长期记忆",
+        "focus": ["host", "openviking"],
+        "note": "记忆正文在火山 OpenViking；Hermes 走原生插件，其余引擎由 Host 召回/同步。"
+      },
+      {
+        "id": "write-gate",
+        "label": "审批落盘",
+        "focus": ["host", "tools", "notes"],
+        "note": "受管笔记只经 DocumentService 审批后写入。"
+      },
+      {
+        "id": "code-graph",
+        "label": "代码维护",
+        "focus": ["graphify"],
+        "note": "探查先走 graphify 图谱，改后 AST-only 更新，减少全库检索 token；不是产品运行时。"
+      }
+    ]
   },
   "components": [
     {
-      "id": "product_ui",
+      "id": "shell",
       "type": "frontend",
-      "label": "统一会话界面",
-      "sublabel": "会话 · 工作室 · 笔记本",
-      "pos": [
-        30,
-        250
-      ],
-      "size": [
-        210,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src/components/aistudio/ProjectChatPanel.tsx"
-        }
-      ]
+      "label": "产品壳",
+      "sublabel": "App · Layout · Sidebar",
+      "tag": "页签保活",
+      "pos": [40, 40],
+      "size": [188, 70],
+      "sources": [{ "path": "src/App.tsx" }]
     },
     {
-      "id": "agent_host",
+      "id": "surfaces",
+      "type": "frontend",
+      "label": "会话与笔记内核",
+      "sublabel": "ProjectChatPanel · DocWorkspace",
+      "pos": [280, 40],
+      "size": [220, 70],
+      "sources": [{ "path": "src/components/aistudio/ProjectChatPanel.tsx" }]
+    },
+    {
+      "id": "stores",
+      "type": "frontend",
+      "label": "Zustand 四隔离",
+      "sublabel": "四 Store 按生命周期隔离",
+      "pos": [40, 200],
+      "size": [188, 70],
+      "sources": [{ "path": "src/stores/agentStore.ts" }]
+    },
+    {
+      "id": "ipc",
+      "type": "frontend",
+      "label": "Tauri 契约",
+      "sublabel": "services/tauri.ts · Channel",
+      "pos": [280, 200],
+      "size": [220, 70],
+      "sources": [{ "path": "src/services/tauri.ts" }]
+    },
+    {
+      "id": "host",
       "type": "backend",
       "label": "Rust Agent Host",
       "sublabel": "固定引擎 · 生命周期 · 事件适配",
-      "pos": [
-        350,
-        250
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/commands.rs"
-        }
-      ]
+      "pos": [580, 200],
+      "size": [220, 70],
+      "sources": [{ "path": "src-tauri/src/agent/commands.rs" }]
     },
     {
-      "id": "model_config",
-      "type": "security",
-      "label": "共享模型配置",
-      "sublabel": "ai_config · Keychain · 模型白名单",
-      "pos": [
-        350,
-        60
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/pi/mod.rs"
-        }
-      ]
-    },
-    {
-      "id": "run_store",
-      "type": "database",
-      "label": "SQLite / RunStore",
-      "sublabel": "统一消息 · 事件重放 · 故障恢复",
-      "pos": [
-        350,
-        470
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/store.rs"
-        }
-      ]
-    },
-    {
-      "id": "hermes_engine",
+      "id": "hermes",
       "type": "backend",
       "label": "Hermes",
-      "sublabel": "随包 Gateway · 私有更新槽",
-      "pos": [
-        720,
-        60
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/hermes/attached_engine.rs"
-        }
-      ]
+      "sublabel": "JSON-RPC / WS",
+      "pos": [900, 36],
+      "size": [188, 62],
+      "sources": [{ "path": "src-tauri/src/agent/hermes/attached_engine.rs" }]
     },
     {
-      "id": "pi_engine",
+      "id": "pi",
       "type": "backend",
       "label": "Pi",
-      "sublabel": "随包独立程序 · 私有会话",
-      "pos": [
-        720,
-        250
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/pi/transport.rs"
-        }
-      ]
+      "sublabel": "JSONL RPC",
+      "pos": [900, 138],
+      "size": [188, 62],
+      "sources": [{ "path": "src-tauri/src/agent/pi/transport.rs" }]
     },
     {
-      "id": "claude_engine",
+      "id": "claude",
       "type": "backend",
       "label": "Claude Code",
-      "sublabel": "本机官方 CLI · 隔离原生历史",
-      "pos": [
-        720,
-        470
-      ],
-      "size": [
-        230,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/claude/transport.rs"
-        }
-      ]
+      "sublabel": "stream-json",
+      "pos": [900, 240],
+      "size": [188, 62],
+      "sources": [{ "path": "src-tauri/src/agent/claude/transport.rs" }]
     },
     {
-      "id": "model_endpoints",
+      "id": "opencode",
+      "type": "backend",
+      "label": "OpenCode",
+      "sublabel": "HTTP / SSE",
+      "pos": [900, 342],
+      "size": [188, 62],
+      "sources": [{ "path": "src-tauri/src/agent/opencode/transport.rs" }]
+    },
+    {
+      "id": "graphify",
       "type": "external",
-      "label": "模型服务",
-      "sublabel": "所选供应商 · 云端或本地端点",
-      "pos": [
-        1110,
-        250
-      ],
-      "size": [
-        210,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/claude/mod.rs"
-        }
-      ]
+      "label": "graphify",
+      "sublabel": "代码图谱 · 先查再读",
+      "tag": "降 token",
+      "pos": [1160, 240],
+      "size": [170, 70]
     },
     {
-      "id": "write_gate",
+      "id": "openviking",
+      "type": "cloud",
+      "label": "火山 OpenViking",
+      "sublabel": "Agent 长期记忆 · 云端 memories",
+      "pos": [580, 380],
+      "size": [220, 70],
+      "sources": [{ "path": "src-tauri/src/agent/openviking.rs" }]
+    },
+    {
+      "id": "tools",
       "type": "security",
       "label": "Rust 工具与审批",
-      "sublabel": "工作区权限 · 文档修改提案",
-      "pos": [
-        30,
-        470
-      ],
-      "size": [
-        210,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/agent/pi/tools.rs"
-        }
-      ]
+      "sublabel": "Scope · 沙箱 · Diff 提案",
+      "pos": [300, 380],
+      "size": [230, 70],
+      "sources": [{ "path": "src-tauri/src/agent/pi/tools.rs" }]
     },
     {
-      "id": "document_data",
+      "id": "notes",
       "type": "database",
-      "label": "文档与工作区",
-      "sublabel": "notes 经 DocumentService 写入",
-      "pos": [
-        30,
-        690
-      ],
-      "size": [
-        210,
-        82
-      ],
-      "sources": [
-        {
-          "path": "src-tauri/src/documents/service.rs"
-        }
-      ]
+      "label": "DocumentService",
+      "sublabel": "notes/*.md · CAS / 锚点",
+      "pos": [300, 530],
+      "size": [230, 70],
+      "sources": [{ "path": "src-tauri/src/documents/service.rs" }]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "WKWebView · 只渲染与 invoke",
+      "wraps": ["shell", "surfaces", "stores", "ipc"]
+    },
+    {
+      "kind": "region",
+      "label": "执行平面 · 按会话固定",
+      "wraps": ["hermes", "pi", "claude", "opencode"]
+    },
+    {
+      "kind": "region",
+      "label": "工程维护 · 非运行时",
+      "wraps": ["graphify"]
     }
   ],
   "connections": [
     {
-      "id": "submit_run",
-      "from": "product_ui",
-      "to": "agent_host",
-      "label": "Tauri invoke / 事件",
-      "variant": "emphasis"
+      "id": "shell-surfaces",
+      "from": "shell",
+      "to": "surfaces",
+      "label": "路由 / 保活",
+      "labelDy": -30
     },
     {
-      "id": "provider_snapshot",
-      "from": "model_config",
-      "to": "agent_host",
-      "label": "凭据快照",
-      "variant": "security",
+      "id": "surfaces-stores",
+      "from": "surfaces",
+      "to": "stores",
+      "label": "selector 订阅",
+      "labelDy": -30
+    },
+    {
+      "id": "surfaces-ipc",
+      "from": "surfaces",
+      "to": "ipc",
+      "label": "命令与订阅",
+      "variant": "emphasis",
       "labelDy": 50
     },
     {
-      "id": "record_run",
-      "from": "agent_host",
-      "to": "run_store",
-      "label": "持久化事件",
-      "labelDy": 70
-    },
-    {
-      "id": "hermes_gateway",
-      "from": "agent_host",
-      "to": "hermes_engine",
-      "label": "JSON-RPC / WS",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "pi_rpc",
-      "from": "agent_host",
-      "to": "pi_engine",
-      "label": "JSONL RPC",
+      "id": "ipc-host",
+      "from": "ipc",
+      "to": "host",
+      "label": "invoke / Channel",
       "variant": "emphasis",
-      "labelAt": [
-        685,
-        291
-      ]
+      "labelAt": [540, 196]
     },
     {
-      "id": "claude_json",
-      "from": "agent_host",
-      "to": "claude_engine",
-      "label": "stream-json",
+      "id": "host-hermes",
+      "from": "host",
+      "to": "hermes",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "hermes_model",
-      "from": "hermes_engine",
-      "to": "model_endpoints",
-      "label": "模型请求",
+      "id": "host-pi",
+      "from": "host",
+      "to": "pi",
+      "variant": "emphasis",
       "fromSide": "right",
-      "toSide": "top"
+      "toSide": "left"
     },
     {
-      "id": "pi_model",
-      "from": "pi_engine",
-      "to": "model_endpoints",
-      "label": "模型请求",
-      "variant": "emphasis"
-    },
-    {
-      "id": "claude_model",
-      "from": "claude_engine",
-      "to": "model_endpoints",
-      "label": "模型请求",
+      "id": "host-claude",
+      "from": "host",
+      "to": "claude",
       "fromSide": "right",
-      "toSide": "bottom"
+      "toSide": "left"
     },
     {
-      "id": "host_policy",
-      "from": "agent_host",
-      "to": "write_gate",
-      "label": "权限复核",
-      "fromSide": "left",
+      "id": "host-opencode",
+      "from": "host",
+      "to": "opencode",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "host-openviking",
+      "from": "host",
+      "to": "openviking",
+      "label": "召回 / 同步",
+      "fromSide": "bottom",
       "toSide": "top",
-      "variant": "security"
+      "labelAt": [760, 328]
     },
     {
-      "id": "review_apply",
-      "from": "write_gate",
-      "to": "document_data",
+      "id": "host-tools",
+      "from": "host",
+      "to": "tools",
+      "label": "权限复核",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "tools-notes",
+      "from": "tools",
+      "to": "notes",
       "label": "审批 / Diff",
       "variant": "security",
-      "labelDy": 60
+      "labelDy": 50
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "统一体验",
+      "title": "前端分层",
       "items": [
-        "模型设置一次，按协议兼容复用",
-        "正文、思考、工具和终态统一呈现"
+        "WKWebView 不直连模型或第三方 HTTP",
+        "app / project / agent / changeSession 不合并"
       ]
     },
     {
       "dot": "emerald",
       "title": "独立执行",
       "items": [
-        "首次执行固定引擎；切换新建会话",
+        "首次 Run 固定引擎；切换新建会话",
         "原生历史隔离，不跨引擎静默回退"
       ]
     },
     {
       "dot": "amber",
-      "title": "能力边界",
+      "title": "记忆与写入",
       "items": [
-        "Hermes 独有 Browser、Skill/MCP、Cron",
-        "Pi / Claude 工具均回到 Rust 审批"
+        "火山 OpenViking 持有记忆正文，不启动本地进程",
+        "受管笔记唯一经 DocumentService 落盘"
       ]
     }
   ]

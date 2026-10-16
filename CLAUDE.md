@@ -31,6 +31,8 @@ SophoNote 的唯一项目根目录就是**本仓库根目录**。
 ./scripts/sophonote.sh status
 ./scripts/sophonote.sh logs
 ./scripts/sophonote.sh stop
+# 仅停止本仓库 Debug 验证包（完整路径匹配，不影响 /Applications 安装版）
+./scripts/sophonote.sh stop-bundle
 
 # 前端
 pnpm exec tsc --noEmit

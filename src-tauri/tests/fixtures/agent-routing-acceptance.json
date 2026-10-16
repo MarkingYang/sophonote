@@ -1,0 +1,1525 @@
+{
+  "schemaVersion": 1,
+  "scope": "80 个独立 Host 合同场景；不是 80 个真实供应商端到端任务完成证明",
+  "cases": [
+    {
+      "id": "A01",
+      "group": "A",
+      "title": "普通问答采用通用稳定顺序",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "你好，请帮我解答问题",
+          "workspacePermissionMode": "plan"
+        }
+      },
+      "expected": {
+        "selected": "hermes",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a01",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A02",
+      "group": "A",
+      "title": "纯翻译采用文本响应路径",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译 Good morning",
+          "workspacePermissionMode": "plan"
+        }
+      },
+      "expected": {
+        "selected": "pi",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a02",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A03",
+      "group": "A",
+      "title": "引号内代码操作属于待翻译材料",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译“修复仓库代码并运行测试”",
+          "workspacePermissionMode": "plan"
+        }
+      },
+      "expected": {
+        "selected": "pi",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a03",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A04",
+      "group": "A",
+      "title": "仓库只读探索使用 OpenAI 路径",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请分析仓库代码结构",
+          "workspacePermissionMode": "plan",
+          "workspaceRoot": "/fixture"
+        }
+      },
+      "expected": {
+        "selected": "opencode",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a04",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A05",
+      "group": "A",
+      "title": "Anthropic 仓库探索优先原生路径",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请分析仓库代码结构",
+          "workspacePermissionMode": "plan",
+          "workspaceRoot": "/fixture"
+        },
+        "protocol": "anthropic"
+      },
+      "expected": {
+        "selected": "claude_code",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a05",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A06",
+      "group": "A",
+      "title": "附件摘要不依赖工作目录类别",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "总结附件内容",
+          "workspacePermissionMode": "plan",
+          "attachments": [
+            {
+              "kind": "file",
+              "name": "report",
+              "path": "/fixture/report.md"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "selected": "pi",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a06",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A07",
+      "group": "A",
+      "title": "旧会话保持 Pi 亲和",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请分析仓库代码结构",
+          "workspacePermissionMode": "plan",
+          "workspaceRoot": "/fixture"
+        },
+        "bound": "pi"
+      },
+      "expected": {
+        "selected": "pi",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a07",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A08",
+      "group": "A",
+      "title": "所有运行时不可用不派发",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译 hello",
+          "workspacePermissionMode": "plan"
+        },
+        "available": []
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a08",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A09",
+      "group": "A",
+      "title": "Pi 不可用时仅选择合法替补",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译 hello",
+          "workspacePermissionMode": "plan"
+        },
+        "available": [
+          "hermes",
+          "opencode"
+        ]
+      },
+      "expected": {
+        "selected": "hermes",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a09",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "A10",
+      "group": "A",
+      "title": "仅一个可用候选时确定选择",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译 hello",
+          "workspacePermissionMode": "plan"
+        },
+        "available": [
+          "opencode"
+        ]
+      },
+      "expected": {
+        "selected": "opencode",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::a10",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B01",
+      "group": "B",
+      "title": "来源搜索允许有界查询",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "websearch",
+          "args": {
+            "query": "公开产品发布日期",
+            "numResults": 5
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b01",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B02",
+      "group": "B",
+      "title": "新闻搜索保留日期范围",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "news_search",
+          "args": {
+            "query": "公开科技新闻",
+            "days": 1
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b02",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B03",
+      "group": "B",
+      "title": "公开 HTTPS 来源读取",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "webfetch",
+          "args": {
+            "url": "https://example.com/article",
+            "format": "text"
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b03",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B04",
+      "group": "B",
+      "title": "拒绝文件协议来源",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "webfetch",
+          "args": {
+            "url": "file:///fixture/private.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b04",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B05",
+      "group": "B",
+      "title": "拒绝携带凭据的来源 URL",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "webfetch",
+          "args": {
+            "url": "https://fixture:dummy@example.com"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b05",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B06",
+      "group": "B",
+      "title": "拒绝空搜索词",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "websearch",
+          "args": {
+            "query": "   "
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b06",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B07",
+      "group": "B",
+      "title": "拒绝无限抓取超时",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "webfetch",
+          "args": {
+            "url": "https://example.com",
+            "timeout": 121
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b07",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B08",
+      "group": "B",
+      "title": "拒绝超过新闻日期范围",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "news_search",
+          "args": {
+            "query": "公开新闻",
+            "days": 366
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b08",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B09",
+      "group": "B",
+      "title": "拒绝超过搜索数量上限",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "websearch",
+          "args": {
+            "query": "公开资料",
+            "numResults": 21
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b09",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "B10",
+      "group": "B",
+      "title": "拒绝未经支持的返回格式",
+      "input": {
+        "kind": "web",
+        "tool": {
+          "name": "webfetch",
+          "args": {
+            "url": "https://example.com",
+            "format": "executable"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "sideEffects": "不发送网络请求；合法调用在取消状态下必须停止"
+      },
+      "contractTest": "agent::automatic::acceptance::b10",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C01",
+      "group": "C",
+      "title": "文档修改预览不得落盘",
+      "input": {
+        "kind": "existing",
+        "fixture": "构造带版本和锚点的文档修改提案"
+      },
+      "expected": {
+        "outcome": "只产生预览，原 Markdown 不变",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::preview_is_dry_run_no_write",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C02",
+      "group": "C",
+      "title": "旧版本提案冲突",
+      "input": {
+        "kind": "existing",
+        "fixture": "baseVersion 与当前文档不一致"
+      },
+      "expected": {
+        "outcome": "冲突且不写入",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::preview_base_version_mismatch_is_conflict",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C03",
+      "group": "C",
+      "title": "锚点缺失或不唯一",
+      "input": {
+        "kind": "existing",
+        "fixture": "TextAnchor 找不到或命中多处"
+      },
+      "expected": {
+        "outcome": "停止而不猜测覆盖",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::preview_anchor_zero_or_multi_match_is_conflict",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C04",
+      "group": "C",
+      "title": "批准后原子写入与版本推进",
+      "input": {
+        "kind": "existing",
+        "fixture": "批准当前有效 Patch"
+      },
+      "expected": {
+        "outcome": "正文与内部版本一致更新",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::apply_commits_writes_revision_and_bumps_version",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C05",
+      "group": "C",
+      "title": "审阅期间用户修改",
+      "input": {
+        "kind": "existing",
+        "fixture": "预览后正文被用户改写"
+      },
+      "expected": {
+        "outcome": "应用冲突且保留用户内容",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::apply_detects_user_edit_between_preview_and_apply",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C06",
+      "group": "C",
+      "title": "同一提案重复批准",
+      "input": {
+        "kind": "existing",
+        "fixture": "同一操作重复预览与应用"
+      },
+      "expected": {
+        "outcome": "只应用一次",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::idempotent_preview_and_apply_execute_once",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C07",
+      "group": "C",
+      "title": "拒绝后不得再应用",
+      "input": {
+        "kind": "existing",
+        "fixture": "用户拒绝修改后再次 apply"
+      },
+      "expected": {
+        "outcome": "拒绝保留且正文不变",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::reject_blocks_later_apply_and_resolves_approval",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C08",
+      "group": "C",
+      "title": "项目外文档提案",
+      "input": {
+        "kind": "existing",
+        "fixture": "目标文档不是授权项目成员"
+      },
+      "expected": {
+        "outcome": "权限拒绝",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::gate_rejects_non_member_in_preview",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C09",
+      "group": "C",
+      "title": "选区修改保持范围外内容",
+      "input": {
+        "kind": "existing",
+        "fixture": "只改显式选区"
+      },
+      "expected": {
+        "outcome": "范围外内容不变且不提前落盘",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::scoped_preview_replaces_only_selected_range_and_is_dry_run",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "C10",
+      "group": "C",
+      "title": "多 hunk 只批准一部分",
+      "input": {
+        "kind": "existing",
+        "fixture": "部分批准后撤销"
+      },
+      "expected": {
+        "outcome": "只写获批 hunk，撤销可恢复",
+        "sideEffects": "仅隔离 DocumentService 夹具；用户文件不变"
+      },
+      "contractTest": "documents::service::tests::partial_apply_writes_only_approved_hunks_and_supports_undo",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D01",
+      "group": "D",
+      "title": "读取授权工作区文件",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "read",
+          "args": {
+            "path": "input.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d01",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D02",
+      "group": "D",
+      "title": "读取显式外部附件",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "read",
+          "args": {
+            "path": "{attachment}"
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d02",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D03",
+      "group": "D",
+      "title": "拒绝目录穿越到未授权文件",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "read",
+          "args": {
+            "path": "../outside.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d03",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D04",
+      "group": "D",
+      "title": "拒绝符号链接越界",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "read",
+          "args": {
+            "path": "escape.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d04",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D05",
+      "group": "D",
+      "title": "拒绝读取应用受保护文件",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "read",
+          "args": {
+            "path": "protected/data.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d05",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D06",
+      "group": "D",
+      "title": "计划模式拒绝写入",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "write",
+          "args": {
+            "content": "changed",
+            "path": "output.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d06",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D07",
+      "group": "D",
+      "title": "计划模式拒绝执行命令",
+      "input": {
+        "kind": "scope",
+        "mode": "plan",
+        "tool": {
+          "name": "bash",
+          "args": {
+            "command": "echo fixture"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d07",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D08",
+      "group": "D",
+      "title": "询问模式写入必须审批",
+      "input": {
+        "kind": "scope",
+        "mode": "ask",
+        "tool": {
+          "name": "write",
+          "args": {
+            "content": "changed",
+            "path": "output.txt"
+          }
+        }
+      },
+      "expected": {
+        "valid": true,
+        "approval": true,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d08",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D09",
+      "group": "D",
+      "title": "附件读取权不授予附件写入",
+      "input": {
+        "kind": "scope",
+        "mode": "autoEdit",
+        "tool": {
+          "name": "write",
+          "args": {
+            "content": "changed",
+            "path": "{attachment}"
+          }
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d09",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "D10",
+      "group": "D",
+      "title": "未知工具不得进入执行",
+      "input": {
+        "kind": "scope",
+        "mode": "ask",
+        "tool": {
+          "name": "delegate",
+          "args": {}
+        }
+      },
+      "expected": {
+        "valid": false,
+        "approval": false,
+        "sideEffects": "真实隔离目录读取或拒绝；有副作用工具只核验审批，不直接执行"
+      },
+      "contractTest": "agent::automatic::acceptance::d10",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E01",
+      "group": "E",
+      "title": "原生 Skill 只交给 Hermes",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "执行已选择技能",
+          "workspacePermissionMode": "plan",
+          "skill": "fixture-skill"
+        }
+      },
+      "expected": {
+        "selected": "hermes",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e01",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E02",
+      "group": "E",
+      "title": "原生 Skill 不可用时不换引擎",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "执行已选择技能",
+          "workspacePermissionMode": "plan",
+          "skill": "fixture-skill"
+        },
+        "available": [
+          "pi",
+          "opencode",
+          "claude_code"
+        ]
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e02",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E03",
+      "group": "E",
+      "title": "原生命令保持原生路径",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "/status",
+          "workspacePermissionMode": "plan"
+        }
+      },
+      "expected": {
+        "selected": "hermes",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e03",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E04",
+      "group": "E",
+      "title": "显式项目原生上下文保持 Hermes",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "总结项目资料",
+          "workspacePermissionMode": "plan",
+          "includeProjectContext": true
+        }
+      },
+      "expected": {
+        "selected": "hermes",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e04",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E05",
+      "group": "E",
+      "title": "未知供应商协议拒绝普通引擎",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "请翻译 hello",
+          "workspacePermissionMode": "plan"
+        },
+        "protocol": "unknown",
+        "hermesVerified": false
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e05",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E06",
+      "group": "E",
+      "title": "Claude 不改写第三方 OpenAI 代理",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "解释结果",
+          "workspacePermissionMode": "plan"
+        },
+        "bound": "claude_code",
+        "baseUrl": "https://proxy.example/v1"
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e06",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E07",
+      "group": "E",
+      "title": "DeepSeek 官方映射保留 Claude 会话",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "解释结果",
+          "workspacePermissionMode": "plan"
+        },
+        "bound": "claude_code",
+        "baseUrl": "https://api.deepseek.com/v1"
+      },
+      "expected": {
+        "selected": "claude_code",
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e07",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E08",
+      "group": "E",
+      "title": "相似域名不得套用官方映射",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "解释结果",
+          "workspacePermissionMode": "plan"
+        },
+        "bound": "claude_code",
+        "baseUrl": "https://api.deepseek.com.evil.test/v1"
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e08",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E09",
+      "group": "E",
+      "title": "模型不在白名单不能执行",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "翻译 hello",
+          "workspacePermissionMode": "plan",
+          "hermesModel": "missing"
+        },
+        "hermesVerified": false
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e09",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "E10",
+      "group": "E",
+      "title": "非法权限模式不产生合法候选",
+      "input": {
+        "kind": "route",
+        "request": {
+          "message": "翻译 hello",
+          "workspacePermissionMode": "unrestricted"
+        }
+      },
+      "expected": {
+        "selected": null,
+        "sideEffects": "不启动模型或工具，不更改原请求"
+      },
+      "contractTest": "agent::automatic::acceptance::e10",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F01",
+      "group": "F",
+      "title": "零候选和单候选不受探测完成顺序影响",
+      "input": {
+        "kind": "existing",
+        "fixture": "零/单/多个候选的有界探测结果"
+      },
+      "expected": {
+        "outcome": "稳定推荐或无推荐",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::zero_one_many_candidates_and_timing_independent_preferences",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F02",
+      "group": "F",
+      "title": "既有手动兼容请求不自动改选",
+      "input": {
+        "kind": "existing",
+        "fixture": "所选引擎探测失败"
+      },
+      "expected": {
+        "outcome": "不替换原选择",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::explicit_choice_failure_never_suggests_another_engine",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F03",
+      "group": "F",
+      "title": "运行时健康不能覆盖会话与模型证据",
+      "input": {
+        "kind": "existing",
+        "fixture": "健康运行时但模型或绑定不兼容"
+      },
+      "expected": {
+        "outcome": "不放行",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::missing_model_evidence_and_bound_session_are_not_overridden_by_runtime_health",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F04",
+      "group": "F",
+      "title": "异步探测超时释放名额",
+      "input": {
+        "kind": "existing",
+        "fixture": "挂起探测超过截止"
+      },
+      "expected": {
+        "outcome": "终止异步工作并释放名额",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::deadline_drops_async_work_and_releases_permit",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F05",
+      "group": "F",
+      "title": "哈希超时保持实际线程名额",
+      "input": {
+        "kind": "existing",
+        "fixture": "阻塞校验晚于截止完成"
+      },
+      "expected": {
+        "outcome": "迟到结果不发布，工作结束才释放",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::timed_out_blocking_work_keeps_slot_and_late_result_is_not_returned",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F06",
+      "group": "F",
+      "title": "独立探测并发推进",
+      "input": {
+        "kind": "existing",
+        "fixture": "两个独立探测等待"
+      },
+      "expected": {
+        "outcome": "并发而非串行累计超时",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::independent_probes_progress_concurrently",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F07",
+      "group": "F",
+      "title": "Hermes 只握手不发送任务",
+      "input": {
+        "kind": "existing",
+        "fixture": "本地 Gateway ready 夹具"
+      },
+      "expected": {
+        "outcome": "只确认握手，不发送 RPC 或模型输入",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::routing_shadow::tests::hermes_probe_validates_ready_without_sending_any_rpc",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F08",
+      "group": "F",
+      "title": "缓存准确到期且不跨数据目录",
+      "input": {
+        "kind": "existing",
+        "fixture": "到达 TTL 或切换 namespace"
+      },
+      "expected": {
+        "outcome": "观察变为 unknown",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::runtime_observations::tests::expires_at_exact_ttl_and_does_not_share_namespaces_or_future_observations",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F09",
+      "group": "F",
+      "title": "缓存有界且定位环境变化失效",
+      "input": {
+        "kind": "existing",
+        "fixture": "多次记录和改变原生定位环境"
+      },
+      "expected": {
+        "outcome": "不超过四条，变化后失效",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::runtime_observations::tests::cache_is_bounded_and_locator_changes_invalidate",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "F10",
+      "group": "F",
+      "title": "更新槽和文件变化使缓存失效",
+      "input": {
+        "kind": "existing",
+        "fixture": "运行时文件变化或 active 指针创建"
+      },
+      "expected": {
+        "outcome": "重新校验，不复用旧证据",
+        "sideEffects": "仅本地探测与夹具，不读取用户凭据"
+      },
+      "contractTest": "agent::runtime_observations::tests::file_modification_deletion_and_pointer_creation_invalidate",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G01",
+      "group": "G",
+      "title": "免密钥供应商完全不读取历史凭据",
+      "input": {
+        "kind": "credential",
+        "requiresKey": false,
+        "credential": "denied"
+      },
+      "expected": {
+        "ok": true,
+        "reads": 0,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g01",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G02",
+      "group": "G",
+      "title": "合法凭据只读取一次",
+      "input": {
+        "kind": "credential",
+        "credential": "valid"
+      },
+      "expected": {
+        "ok": true,
+        "reads": 1,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g02",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G03",
+      "group": "G",
+      "title": "缺失凭据拒绝启动",
+      "input": {
+        "kind": "credential",
+        "credential": "empty"
+      },
+      "expected": {
+        "error": "CredentialMissing",
+        "reads": 1,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g03",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G04",
+      "group": "G",
+      "title": "纯空白凭据不算免密钥",
+      "input": {
+        "kind": "credential",
+        "credential": "blank"
+      },
+      "expected": {
+        "error": "CredentialMissing",
+        "reads": 1,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g04",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G05",
+      "group": "G",
+      "title": "钥匙串拒绝不同于未配置",
+      "input": {
+        "kind": "credential",
+        "credential": "denied"
+      },
+      "expected": {
+        "error": "CredentialUnavailable",
+        "reads": 1,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g05",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G06",
+      "group": "G",
+      "title": "模型白名单拒绝早于读取凭据",
+      "input": {
+        "kind": "credential",
+        "model": "missing"
+      },
+      "expected": {
+        "error": "ModelNotConfigured",
+        "reads": 0,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g06",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G07",
+      "group": "G",
+      "title": "空模型标识不可回退默认",
+      "input": {
+        "kind": "credential",
+        "model": ""
+      },
+      "expected": {
+        "error": "ModelNotConfigured",
+        "reads": 0,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g07",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G08",
+      "group": "G",
+      "title": "不兼容协议不得访问凭据",
+      "input": {
+        "kind": "credential",
+        "protocol": "unknown"
+      },
+      "expected": {
+        "error": "UnsupportedProtocol",
+        "reads": 0,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g08",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G09",
+      "group": "G",
+      "title": "独立供应商实例不串用凭据",
+      "input": {
+        "kind": "credential",
+        "providerId": "fixture-secondary",
+        "credential": "valid",
+        "model": "selected"
+      },
+      "expected": {
+        "ok": true,
+        "reads": 1,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g09",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "G10",
+      "group": "G",
+      "title": "未核验原生目录不读取 Hermes 凭据",
+      "input": {
+        "kind": "credential",
+        "engine": "hermes"
+      },
+      "expected": {
+        "error": "NativeCatalogRequired",
+        "reads": 0,
+        "sideEffects": "凭据闭包仅返回合成测试值；不访问真实钥匙串/供应商"
+      },
+      "contractTest": "agent::automatic::acceptance::g10",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H01",
+      "group": "H",
+      "title": "重复发送只获得一个派发租约",
+      "input": {
+        "kind": "existing",
+        "fixture": "相同请求 ID 重发与修改内容冲突"
+      },
+      "expected": {
+        "outcome": "唯一租约，冲突不运行",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::commands::tests::repeated_public_identity_owns_exactly_one_dispatch_lease",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H02",
+      "group": "H",
+      "title": "claim 前停止不产生用户消息或 Run",
+      "input": {
+        "kind": "existing",
+        "fixture": "准备期间取消后迟到 claim"
+      },
+      "expected": {
+        "outcome": "取消生效且零 Run",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::commands::tests::cancellation_before_claim_invalidates_receipt_without_creating_run",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H03",
+      "group": "H",
+      "title": "claim 后取消意图不丢失",
+      "input": {
+        "kind": "existing",
+        "fixture": "claim 与取消 token 注册之间停止"
+      },
+      "expected": {
+        "outcome": "停止意图到达实际执行器",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::commands::tests::cancellation_between_claim_and_token_registration_is_not_lost",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H04",
+      "group": "H",
+      "title": "名额满草稿保存且不自动重放",
+      "input": {
+        "kind": "existing",
+        "fixture": "两个名额占用时发送第三条"
+      },
+      "expected": {
+        "outcome": "无 Run 失败草稿可恢复，旧 ID 不再执行",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::commands::tests::admission_capacity_is_shared_by_manual_and_auto_and_released_on_cancel",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H05",
+      "group": "H",
+      "title": "准备阶段进程退出",
+      "input": {
+        "kind": "existing",
+        "fixture": "准备中结束实际子进程"
+      },
+      "expected": {
+        "outcome": "草稿与旧历史恢复，可显式新请求",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_during_preparation_preserves_history_and_allows_explicit_retry",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H06",
+      "group": "H",
+      "title": "claim 未提交时进程退出",
+      "input": {
+        "kind": "existing",
+        "fixture": "事务写入一半结束实际子进程"
+      },
+      "expected": {
+        "outcome": "Run/消息/审计一起回滚",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_inside_claim_rolls_back_run_message_and_audit_together",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H07",
+      "group": "H",
+      "title": "claim 已提交但派发未知",
+      "input": {
+        "kind": "existing",
+        "fixture": "提交 claim 后结束实际子进程"
+      },
+      "expected": {
+        "outcome": "保留 unknown 锁，不重发",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_after_claim_keeps_unknown_dispatch_locked",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H08",
+      "group": "H",
+      "title": "原生 ack 未持久化时进程退出",
+      "input": {
+        "kind": "existing",
+        "fixture": "本地模拟外部 ack 后结束进程"
+      },
+      "expected": {
+        "outcome": "不推断未执行，不重复派发",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_after_external_ack_never_replays_unpersisted_ack",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H09",
+      "group": "H",
+      "title": "终态已持久化后进程退出",
+      "input": {
+        "kind": "existing",
+        "fixture": "终态保存后结束实际子进程"
+      },
+      "expected": {
+        "outcome": "同一答案、历史与身份恢复",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_after_terminal_recovers_same_result_without_another_run",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    },
+    {
+      "id": "H10",
+      "group": "H",
+      "title": "忙碌拒绝后进程退出",
+      "input": {
+        "kind": "existing",
+        "fixture": "无 Run 的失败草稿保存后结束进程"
+      },
+      "expected": {
+        "outcome": "恢复原草稿，旧 ID 不启动",
+        "sideEffects": "仅隔离 SQLite/测试进程；原生 ack 为本地故障夹具"
+      },
+      "contractTest": "agent::submission::live::crash_tests::process_death_after_admission_rejection_keeps_draft_without_restarting_it",
+      "evidenceLevel": "host_contract",
+      "releaseRequirement": "还需真实原生合同与宿主验收证据，单项合同通过不代表整场任务通过"
+    }
+  ]
+}

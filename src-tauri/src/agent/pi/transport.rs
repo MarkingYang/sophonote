@@ -140,6 +140,19 @@ pub async fn run(
     let super::ExecutionRuntime::Pi(runtime) = &prepared.runtime else {
         return Err("Pi 运行时类型不匹配".into());
     };
+    let collaboration = crate::agent::orchestration::native_child::parent_context(binding)?;
+    if collaboration.is_some() && prepared.scope.mode != "plan" {
+        return Err("当前协作执行器只开放计划模式，不能混入写入授权".into());
+    }
+    let deadline = crate::agent::orchestration::native_child::execution_deadline(binding)?;
+    let expires = tokio::time::Instant::now()
+        + Duration::from_millis(deadline.map_or(600_000, |value| {
+            value.saturating_sub(super::now_ms() as i64).max(0) as u64
+        }));
+    let context = match &collaboration {
+        Some(guidance) => format!("{}\n\n{guidance}", prepared.context),
+        None => prepared.context.clone(),
+    };
     let mut command = tokio::process::Command::new(&runtime.executable);
     command.args(["--mode","rpc","--offline","--no-builtin-tools","--no-extensions","--no-skills","--no-prompt-templates","--no-themes","--no-context-files","--no-approve"])
         .arg("--extension").arg(&runtime.extension)
@@ -150,10 +163,15 @@ pub async fn run(
         .env("PI_OFFLINE","1").env("LANG","en_US.UTF-8")
         .env("PATH",std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()))
         .env("SOPHONOTE_PI_PARENT",std::process::id().to_string())
+        .env("SOPHONOTE_PI_MAX_REQUESTS",prepared.max_turns.to_string())
+        .env("SOPHONOTE_PI_DEADLINE_MS",deadline.unwrap_or(0).to_string())
         .env("SOPHONOTE_PI_MODEL_KEY", if prepared.key.is_empty() { "local-no-key" } else { &prepared.key })
         .env("SOPHONOTE_PI_MODEL",json!({"baseUrl":prepared.provider.base_url,"id":prepared.model,
             "api":if prepared.provider.protocol == "anthropic" { "anthropic-messages" } else { "openai-completions" }}).to_string())
-        .env("SOPHONOTE_PI_CONTEXT",&prepared.context)
+        .env("SOPHONOTE_PI_CONTEXT",context)
+        .env("SOPHONOTE_PI_COLLABORATION",if collaboration.is_some(){"1"}else{"0"})
+        .env("SOPHONOTE_PI_READONLY",if prepared.scope.read_lease.is_some(){"1"}else{"0"})
+        .env("SOPHONOTE_WEB_GUIDANCE",crate::agent::web::guidance())
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     // Proxy values only; provider/other agent secrets are never inherited by the sidecar.
     for key in [
@@ -208,9 +226,16 @@ pub async fn run(
     let mut pending: Option<(String, tools::Request)> = None;
     let mut started = false;
     let mut turns = 0;
+    let result = async {
     send(&mut stdin, json!({"id":"handshake","type":"get_commands"})).await?;
-    let result = loop {
+    loop {
         let frame = tokio::select! {
+            _ = tokio::time::sleep_until(expires), if deadline.is_some() => {
+                let mut conn = rusqlite::Connection::open(&binding.db_path).map_err(|_|"任务预算到期，停止状态待核实")?;
+                let runs = crate::agent::orchestration::supervisor::cancel_for_run(&mut conn,&binding.run_id,super::now_ms() as i64)?;
+                crate::agent::orchestration::supervisor::signal(runs);
+                break Err("协作任务已达到时限".into());
+            }
             _ = cancel.cancelled() => {
                 let _ = send(&mut stdin,json!({"id":"abort","type":"abort"})).await;
                 // Let Pi record its aborted assistant turn before forceful process cleanup.
@@ -222,8 +247,8 @@ pub async fn run(
                 break Err("Pi 已取消".into());
             }
             control = controls.recv(), if pending.is_some() => {
-                if let Some(GatewayControl::Approval { choice, .. }) = control {
-                    if !matches!(choice.as_str(),"once"|"deny") { continue; }
+                if let Some(GatewayControl::Approval { approval_id, choice, all: false }) = control {
+                    if !matches!(choice.as_str(),"once"|"deny") || pending.as_ref().is_none_or(|(id, _)| id != &approval_id) { continue; }
                     if let Some((id,request)) = pending.take() {
                         let result = if choice == "once" { tools::execute(&prepared.scope,&request,cancel).await }
                             else { Err("用户拒绝了此操作".into()) };
@@ -257,12 +282,26 @@ pub async fn run(
                 if !ready {
                     break Err("Pi 宿主权限扩展未加载，已停止执行".into());
                 }
+                if (collaboration.is_some() || prepared.scope.read_lease.is_some())
+                    && !frame["data"]["commands"]
+                        .as_array()
+                        .is_some_and(|commands| {
+                            commands
+                                .iter()
+                                .any(|c| c["name"] == "sophonote_readonly_collaboration_v1")
+                        })
+                {
+                    break Err("Pi 尚未加载受控协作与请求预算协议".into());
+                }
                 send(&mut stdin,json!({"id":"prompt","type":"prompt","message":prepared.prompt,"images":prepared.images})).await?;
                 started = true;
             }
         }
         if frame["type"] == "turn_start" {
             turns += 1;
+            if turns == 1 && prepared.scope.read_lease.is_some() {
+                crate::agent::orchestration::native_child::acknowledge_start(binding)?;
+            }
             if turns > prepared.max_turns {
                 break Err("Pi 已达到本轮模型调用上限".into());
             }
@@ -281,9 +320,46 @@ pub async fn run(
                 .await?;
                 continue;
             }
-            let request: tools::Request =
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct ToolRequest {
+                name: String,
+                args: Value,
+                #[serde(default)]
+                call_id: Option<String>,
+            }
+            let envelope: ToolRequest =
                 serde_json::from_str(frame["placeholder"].as_str().ok_or("Pi 工具参数缺失")?)
                     .map_err(|_| "Pi 工具参数无效")?;
+            let request = tools::Request {
+                name: envelope.name,
+                args: envelope.args,
+            };
+            if matches!(
+                request.name.as_str(),
+                "delegate_task" | "await_task" | "cancel_task"
+            ) {
+                let result = match envelope
+                    .call_id
+                    .as_deref()
+                    .filter(|id| !id.is_empty() && id.len() <= 256)
+                {
+                    Some(call) if collaboration.is_some() => {
+                        crate::agent::orchestration::native_child::handle_tool(
+                            prepared,
+                            binding,
+                            &request.name,
+                            &request.args,
+                            call,
+                            cancel,
+                        )
+                        .await
+                    }
+                    _ => Err("此运行没有受控委托权限或原生调用身份".into()),
+                };
+                send_tool_result(&mut stdin, &id, result).await?;
+                continue;
+            }
             match prepared.scope.validate(&request) {
                 Ok(true) => {
                     if pending.is_some() {
@@ -333,10 +409,20 @@ pub async fn run(
                 None => break Err("Pi 未返回助手回复".into()),
             }
         }
-    };
+    }
+    }.await;
     // EOF triggers Pi shutdown. Drop also kills the process group if native shutdown hangs.
     drop(stdin);
-    let _ = tokio::time::timeout(Duration::from_secs(2), child.0.wait()).await;
+    if !matches!(
+        tokio::time::timeout(Duration::from_secs(2), child.0.wait()).await,
+        Ok(Ok(_))
+    ) {
+        child.0.start_kill().map_err(|_| "Pi 进程停止状态待核实")?;
+        tokio::time::timeout(Duration::from_secs(3), child.0.wait())
+            .await
+            .map_err(|_| "Pi 进程停止状态待核实")?
+            .map_err(|_| "Pi 进程停止状态待核实")?;
+    }
     result
 }
 

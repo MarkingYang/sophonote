@@ -22,7 +22,7 @@ pub(super) fn config(p: &Prepared, url: &str, bearer: &str) -> Value {
         "lsp":false,"formatter":false,"enabled_providers":["sophonote"],
         "model":format!("sophonote/{}",p.model),"small_model":format!("sophonote/{}",p.model),
         "permission":{"*":"deny","sophonote_*":"allow"},
-        "agent":{"sophonote":{"mode":"primary","prompt":SYSTEM,"steps":p.max_turns},
+        "agent":{"sophonote":{"mode":"primary","prompt":format!("{SYSTEM} {}", crate::agent::web::guidance()),"steps":p.max_turns},
             "title":{"disable":true},"summary":{"disable":true}},"default_agent":"sophonote",
         "provider":{"sophonote":{"npm":npm,"name":p.provider.id,
             "options":{"baseURL":p.provider.base_url,"apiKey":p.key},

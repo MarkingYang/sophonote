@@ -44,6 +44,7 @@ pub(crate) fn definitions() -> Value {
     if cfg!(target_os = "macos") {
         tools.push(json!({"name":"bash","description":"Run a command in the authorized workspace, with host approval and a 60-second sandbox limit.","inputSchema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}));
     }
+    tools.extend(crate::agent::web::definitions());
     json!(tools)
 }
 
@@ -51,6 +52,15 @@ pub(crate) async fn start(
     scope: tools::Scope,
     events: Arc<EventEmitter>,
     run: &str,
+    cancel: CancellationToken,
+) -> Result<Server, String> {
+    start_with_controls(scope, events, register_run_control(run), cancel).await
+}
+
+pub(crate) async fn start_with_controls(
+    scope: tools::Scope,
+    events: Arc<EventEmitter>,
+    controls: tokio::sync::mpsc::UnboundedReceiver<GatewayControl>,
     cancel: CancellationToken,
 ) -> Result<Server, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -65,7 +75,7 @@ pub(crate) async fn start(
     let state = Arc::new(State {
         scope,
         events,
-        controls: Mutex::new(register_run_control(run)),
+        controls: Mutex::new(controls),
         cancel: stop.clone(),
         bearer: bearer.clone(),
     });
@@ -177,7 +187,7 @@ async fn handle(
 }
 
 async fn invoke(state: &State, request: &tools::Request) -> Result<String, String> {
-    // Serialize calls so an approval always applies to exactly the displayed request.
+    // Serialize tools; the immutable request is additionally bound to a fresh approval ID.
     let mut controls = tokio::select! {
         _ = state.cancel.cancelled() => return Err("操作已取消".into()),
         controls = state.controls.lock() => controls,
@@ -199,14 +209,15 @@ async fn invoke(state: &State, request: &tools::Request) -> Result<String, Strin
         if state.scope.validate(request)? {
             while controls.try_recv().is_ok() {}
             emit(AgentEventPayload::ApprovalRequired { approval_id: id.clone(), tool_name: request.name.clone(), arguments_json: request.args.to_string(), choices: vec!["once".into(),"deny".into()] })?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
             loop {
                 let control = tokio::select! {
                     _ = state.cancel.cancelled() => return Err("操作已取消".into()),
-                    control = tokio::time::timeout(Duration::from_secs(600), controls.recv()) => control.map_err(|_| "审批等待超时")?,
+                    control = tokio::time::timeout_at(deadline, controls.recv()) => control.map_err(|_| "审批等待超时")?,
                 };
                 match control {
-                    Some(GatewayControl::Approval { choice, .. }) if choice == "once" => break,
-                    Some(GatewayControl::Approval { choice, .. }) if choice == "deny" => return Err("用户拒绝了此操作".into()),
+                    Some(GatewayControl::Approval { approval_id, choice, all: false }) if approval_id == id && choice == "once" => break,
+                    Some(GatewayControl::Approval { approval_id, choice, all: false }) if approval_id == id && choice == "deny" => return Err("用户拒绝了此操作".into()),
                     None => return Err("审批通道已关闭".into()),
                     _ => {},
                 }
@@ -226,4 +237,170 @@ async fn invoke(state: &State, request: &tools::Request) -> Result<String, Strin
         provenance: vec![],
     })?;
     result
+}
+
+#[cfg(test)]
+mod host_boundary_tests {
+    use super::*;
+    use crate::agent::events::{AgentEvent, EventTransport};
+    struct Capture(tokio::sync::mpsc::UnboundedSender<AgentEvent>);
+    impl EventTransport for Capture {
+        fn send(&self, event: AgentEvent) -> Result<(), String> {
+            self.0.send(event).map_err(|_| "closed".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_or_repeated_approval_cannot_authorize_another_tool() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("approval-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let (events, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let (controls, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(State {
+            scope: tools::Scope {
+                read_lease: None,
+                readonly: None,
+                workspace: root.clone(),
+                read_paths: vec![],
+                workcopy: None,
+                protected: vec![],
+                mode: "ask".into(),
+            },
+            events: Arc::new(EventEmitter::new(
+                "thread",
+                "run",
+                Arc::new(Capture(events)),
+            )),
+            controls: Mutex::new(receiver),
+            cancel: CancellationToken::new(),
+            bearer: "unused".into(),
+        });
+        let mut previous = "another-run-approval".to_string();
+        for index in 0..2 {
+            let path = root.join(format!("{index}.txt"));
+            let request = tools::Request {
+                name: "write".into(),
+                args: json!({"path":path,"content":"approved"}),
+            };
+            let cloned = state.clone();
+            let task = tokio::spawn(async move { invoke(&cloned, &request).await });
+            let id = loop {
+                let event = tokio::time::timeout(Duration::from_secs(2), observed.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if let AgentEventPayload::ApprovalRequired { approval_id, .. } = event.payload {
+                    break approval_id;
+                }
+            };
+            // Neither a different request, a persistent choice, nor all=true grants this action.
+            for (approval_id, choice, all) in [
+                (&previous, "once", false),
+                (&id, "session", false),
+                (&id, "once", true),
+            ] {
+                controls
+                    .send(GatewayControl::Approval {
+                        approval_id: approval_id.clone(),
+                        choice: choice.into(),
+                        all,
+                    })
+                    .unwrap();
+            }
+            tokio::task::yield_now().await;
+            assert!(!path.exists());
+            assert!(!task.is_finished());
+            controls
+                .send(GatewayControl::Approval {
+                    approval_id: id.clone(),
+                    choice: if index == 0 { "once" } else { "deny" }.into(),
+                    all: false,
+                })
+                .unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.is_ok(), index == 0);
+            assert_eq!(path.exists(), index == 0);
+            previous = id;
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn host_tools_require_approval_deny_plan_and_cancel_before_write() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("hermes-host-tools-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        for (mode, cancel_before_approval) in [("ask", false), ("plan", false), ("ask", true)] {
+            let (events, mut observed) = tokio::sync::mpsc::unbounded_channel();
+            let (controls, receiver) = tokio::sync::mpsc::unbounded_channel();
+            let token = CancellationToken::new();
+            let state = Arc::new(State {
+                scope: tools::Scope {
+                    read_lease: None,
+                    readonly: None,
+                    workspace: root.clone(),
+                    read_paths: vec![],
+                    workcopy: None,
+                    protected: vec![],
+                    mode: mode.into(),
+                },
+                events: Arc::new(EventEmitter::new(
+                    "thread",
+                    "run",
+                    Arc::new(Capture(events)),
+                )),
+                controls: Mutex::new(receiver),
+                cancel: token.clone(),
+                bearer: "unused".into(),
+            });
+            let path = root.join(format!("{mode}-{cancel_before_approval}.txt"));
+            let request = tools::Request {
+                name: "write".into(),
+                args: json!({"path":path,"content":"approved"}),
+            };
+            let task = tokio::spawn(async move { invoke(&state, &request).await });
+            if mode == "ask" {
+                let approval_id = loop {
+                    let event = tokio::time::timeout(Duration::from_secs(2), observed.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if let AgentEventPayload::ApprovalRequired { approval_id, .. } = event.payload {
+                        break approval_id;
+                    }
+                };
+                assert!(!path.exists(), "no write before approval");
+                if cancel_before_approval {
+                    token.cancel();
+                }
+                controls
+                    .send(GatewayControl::Approval {
+                        approval_id,
+                        choice: "once".into(),
+                        all: false,
+                    })
+                    .unwrap();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            if mode == "plan" || cancel_before_approval {
+                assert!(result.is_err());
+                assert!(!path.exists());
+            } else {
+                assert!(result.is_ok());
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "approved");
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

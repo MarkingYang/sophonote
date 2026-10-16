@@ -1383,6 +1383,7 @@ pub async fn keychain_save_api_key(
     if api_key.is_empty() {
         return keychain_delete_api_key(app, provider).await;
     }
+    let credential_change = crate::agent::automatic::CredentialChange::begin();
     let keychain_result = (|| -> Result<(), String> {
         crate::credentials::save(&provider, &api_key, true)?;
         let conn = rusqlite::Connection::open(get_db_path(&app)).map_err(|e| e.to_string())?;
@@ -1415,6 +1416,8 @@ pub async fn keychain_save_api_key(
             }
         }
     };
+
+    drop(credential_change);
 
     // OpenRouter 排名凭据由 SophoNote Bridge 在每次刷新时直接从 Host 读取，
     // 不注入 Hermes Provider 环境；保存它不应中断正在运行的会话或计划任务。
@@ -1473,6 +1476,7 @@ pub async fn keychain_get_api_key(app: AppHandle, provider: String) -> ApiRespon
 
 #[tauri::command]
 pub async fn keychain_delete_api_key(app: AppHandle, provider: String) -> ApiResponse<String> {
+    let credential_change = crate::agent::automatic::CredentialChange::begin();
     // 先成功删除安全存储，再删旧值和缓存；权限失败不能丢失可恢复来源。
     if let Err(error) = crate::credentials::delete(&provider) {
         return ApiResponse::err(error);
@@ -1491,6 +1495,7 @@ pub async fn keychain_delete_api_key(app: AppHandle, provider: String) -> ApiRes
     if let Err(error) = result {
         return ApiResponse::err(error);
     }
+    drop(credential_change);
     match crate::restart_bundled_hermes(&app).await {
         Ok(()) => ApiResponse::ok("deleted".to_string()),
         Err(error) => {

@@ -19,16 +19,34 @@ const REQUEST_TIMEOUT_SECS: u64 = 120;
 
 /// 进程共享 HTTP 客户端（连接池复用；reqwest::Client 本身廉价克隆但池子要共享）
 static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+static LOCAL_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
-fn http_client() -> &'static reqwest::Client {
+fn is_loopback_endpoint(endpoint: &str) -> bool {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        })
+}
+
+fn http_client(endpoint: &str) -> &'static reqwest::Client {
     // build() 仅在 TLS 后端初始化异常时失败（进程级致命错误，expect 可接受）；
     // 不用 get_or_try_init（宿主 rustc 版本该特性尚未稳定）
-    HTTP.get_or_init(|| {
-        reqwest::Client::builder()
+    let local = is_loopback_endpoint(endpoint);
+    let pool = if local { &LOCAL_HTTP } else { &HTTP };
+    pool.get_or_init(|| {
+        let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(15))
-            .build()
-            .expect("HTTP 客户端初始化失败")
+            .redirect(reqwest::redirect::Policy::none());
+        let builder = if local { builder.no_proxy() } else { builder };
+        builder.build().expect("HTTP 客户端初始化失败")
     })
 }
 
@@ -213,8 +231,11 @@ impl OpenAiCompatGateway {
                 snapshot.id, snapshot.protocol
             )));
         }
-        let api_key =
-            crate::commands::get_cached_api_key(app, &snapshot.id).map_err(ModelError::Config)?;
+        let api_key = if snapshot.requires_key {
+            crate::commands::get_cached_api_key(app, &snapshot.id).map_err(ModelError::Config)?
+        } else {
+            String::new()
+        };
         if api_key.is_empty() && snapshot.requires_key {
             return Err(ModelError::Config(format!(
                 "供应商 {} 未填写 API Key，请到 设置 → AI 配置 填写",
@@ -421,13 +442,20 @@ impl OpenAiCompatGateway {
         request: ModelRequest,
         cancel: CancellationToken,
     ) -> Result<ModelResponse, ModelError> {
-        let client = http_client();
+        self.complete_observed_once(request, cancel)
+            .await
+            .map(|(response, _)| response)
+    }
+
+    /// A single bounded request, with no replay. Absent usage remains unknown.
+    pub(crate) async fn complete_observed_once(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<(ModelResponse, Option<TokenUsage>), ModelError> {
+        let client = http_client(&self.base_url);
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let body = self.build_body(&request);
-        if self.api_key.is_empty() {
-            // 免鉴权端点排障线索：写入 dev.log，不含任何凭据
-            eprintln!("[model] provider={} keyless POST {}", self.provider_id, url);
-        }
 
         let request_builder = client.post(&url).header("Content-Type", "application/json");
         // 免鉴权端点（Ollama/私有化）不带 Authorization 头
@@ -443,25 +471,40 @@ impl OpenAiCompatGateway {
             _ = cancel.cancelled() => return Err(ModelError::Cancelled),
             r = send_future.send() => r,
         };
-        let res = res.map_err(|e| ModelError::Network(e.to_string()))?;
+        let mut res = res.map_err(|e| ModelError::Network(e.to_string()))?;
 
         let status = res.status();
-        let data: serde_json::Value = res
-            .json()
-            .await
-            .map_err(|e| ModelError::Parse(e.to_string()))?;
-
+        const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return Err(ModelError::Cancelled),
+                chunk = res.chunk() => chunk.map_err(|_| ModelError::Network("读取响应失败".into()))?,
+            };
+            let Some(chunk) = chunk else { break };
+            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(ModelError::Parse("响应超过大小限制".into()));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         if !status.is_success() {
             return Err(ModelError::Http {
                 status: status.as_u16(),
-                body: data.to_string(),
+                body: "模型端点拒绝请求".into(),
                 url: url.clone(),
             });
         }
+        let data: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| ModelError::Parse("响应不是有效 JSON".into()))?;
         if cancel.is_cancelled() {
             return Err(ModelError::Cancelled);
         }
-        Self::parse_response(&data)
+        let response = Self::parse_response(&data)?;
+        let reported = ["prompt_tokens", "completion_tokens", "total_tokens"]
+            .iter()
+            .all(|field| data["usage"][*field].as_u64().is_some())
+            .then_some(response.usage);
+        Ok((response, reported))
     }
 }
 
@@ -508,5 +551,193 @@ mod tests {
 
         let body = gateway.build_body(&request(Some(false)));
         assert!(body.get("thinking").is_none());
+    }
+}
+
+#[cfg(test)]
+mod bounded_wire_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[test]
+    fn loopback_selection_uses_parsed_host_and_preserves_remote_proxy_pool() {
+        for local in [
+            "http://localhost:8000/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://127.12.0.4/v1",
+            "http://[::1]:8000/v1",
+        ] {
+            assert!(is_loopback_endpoint(local), "{local}");
+            assert!(std::ptr::eq(
+                http_client(local),
+                http_client("http://127.0.0.1")
+            ));
+        }
+        for remote in [
+            "https://localhost.example/v1",
+            "https://127.0.0.1.example/v1",
+            "https://127.0.0.1@provider.example/v1",
+            "http://192.168.1.1/v1",
+            "invalid",
+        ] {
+            assert!(!is_loopback_endpoint(remote), "{remote}");
+        }
+        assert!(!std::ptr::eq(
+            http_client("http://localhost"),
+            http_client("https://provider.example")
+        ));
+    }
+    async fn fixture(
+        status: &str,
+        body: String,
+        headers: &str,
+    ) -> (OpenAiCompatGateway, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let reply = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{headers}\r\n{body}",
+            body.len()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 8192];
+            loop {
+                let size = socket.read(&mut buffer).await.unwrap();
+                if size == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..size]);
+                if let Some(end) = request.windows(4).position(|p| p == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&request[..end]);
+                    let len = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let _ = socket.write_all(reply.as_bytes()).await;
+            String::from_utf8(request).unwrap()
+        });
+        (
+            OpenAiCompatGateway {
+                provider_id: "fixture".into(),
+                base_url: format!("http://{address}/v1"),
+                api_key: String::new(),
+                default_model: "exact-model".into(),
+            },
+            server,
+        )
+    }
+    fn request() -> ModelRequest {
+        ModelRequest {
+            model: "exact-model".into(),
+            messages: vec![crate::model::messages::ModelMessage::user("翻译：hello")],
+            tools: vec![],
+            tool_choice: None,
+            temperature: None,
+            max_tokens: Some(64),
+            thinking: Some(false),
+            prompt_version: "text-response@1".into(),
+            run_id: None,
+        }
+    }
+    #[tokio::test]
+    async fn text_wire_has_no_tools_or_credentials_and_unknown_is_not_zero() {
+        for usage in [
+            None,
+            Some(serde_json::json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0})),
+        ] {
+            let mut body = serde_json::json!({"choices":[{"message":{"content":"你好"},"finish_reason":"stop"}]});
+            if let Some(usage) = &usage {
+                body["usage"] = usage.clone();
+            }
+            let (gateway, server) = fixture(
+                "200 OK",
+                body.to_string(),
+                "Content-Type: application/json\r\n",
+            )
+            .await;
+            let (response, reported) = gateway
+                .complete_observed_once(request(), CancellationToken::new())
+                .await
+                .unwrap();
+            assert_eq!(response.content, "你好");
+            assert_eq!(reported.is_some(), usage.is_some());
+            let wire = server.await.unwrap();
+            assert!(!wire.to_lowercase().contains("authorization:"));
+            let body: serde_json::Value =
+                serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert!(body.get("tools").is_none());
+            assert_eq!(body["model"], "exact-model");
+        }
+    }
+    #[tokio::test]
+    async fn text_request_does_not_retry_or_follow_redirect_and_retains_http_status() {
+        for (status, code) in [("429 Too Many Requests", 429), ("302 Found", 302)] {
+            let (gateway, server) = fixture(
+                status,
+                "not JSON / secret backend error".into(),
+                "Location: http://127.0.0.1:1/never\r\n",
+            )
+            .await;
+            let error = gateway
+                .complete_observed_once(request(), CancellationToken::new())
+                .await
+                .unwrap_err();
+            assert!(matches!(error,ModelError::Http{status,..} if status==code));
+            assert!(!error.to_string().contains("secret backend"));
+            server.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn text_response_body_has_a_hard_bound() {
+        let (gateway, server) = fixture("200 OK", " ".repeat(2 * 1024 * 1024 + 1), "").await;
+        assert!(matches!(
+            gateway
+                .complete_observed_once(request(), CancellationToken::new())
+                .await,
+            Err(ModelError::Parse(_))
+        ));
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn cancel_interrupts_body_download_not_only_request_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n{")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            stop.cancel();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+        let gateway = OpenAiCompatGateway {
+            provider_id: "fixture".into(),
+            base_url: format!("http://{address}"),
+            api_key: String::new(),
+            default_model: "model".into(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            gateway.complete_observed_once(request(), cancel),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(ModelError::Cancelled)));
+        server.await.unwrap();
     }
 }

@@ -11,6 +11,7 @@ pub mod config;
 pub mod event_mapper;
 pub mod gateway_client;
 pub mod health_supervisor;
+pub(crate) mod host_tools;
 pub mod local_proxy;
 pub mod readonly_engine;
 pub mod recovery;

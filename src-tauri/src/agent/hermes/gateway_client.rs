@@ -158,8 +158,15 @@ pub struct HermesGatewayConnection {
 
 #[derive(Debug)]
 pub enum GatewayControl {
-    Approval { choice: String, all: bool },
-    Clarify { request_id: String, answer: String },
+    Approval {
+        approval_id: String,
+        choice: String,
+        all: bool,
+    },
+    Clarify {
+        request_id: String,
+        answer: String,
+    },
 }
 
 fn controls() -> &'static Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<GatewayControl>>>

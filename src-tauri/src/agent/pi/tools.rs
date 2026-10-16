@@ -3,20 +3,33 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 pub const FILE_LIMIT: u64 = 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scope {
+    #[serde(skip)]
+    pub read_lease: Option<crate::agent::orchestration::scope::ReadLease>,
+    pub readonly: Option<ReadOnlyBoundary>,
     pub workspace: PathBuf,
     pub read_paths: Vec<PathBuf>,
     pub workcopy: Option<PathBuf>,
     pub protected: Vec<PathBuf>,
     pub mode: String,
+}
+
+/// A narrowed child grant. Private members prevent a tool request from creating
+/// authority; construct it only by intersecting a validated parent Scope.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadOnlyBoundary {
+    roots: Vec<(PathBuf, bool)>,
+    web: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -47,8 +60,46 @@ fn resolved(path: &Path) -> Result<PathBuf, String> {
 }
 
 impl Scope {
+    pub fn restrict_readonly(&self, paths: &[PathBuf], web: bool) -> Result<Self, String> {
+        if paths.len() > 20 {
+            return Err("只读任务最多引用二十个路径".into());
+        }
+        if web && self.readonly.as_ref().is_some_and(|boundary| !boundary.web) {
+            return Err("不能扩大子任务的联网权限".into());
+        }
+        let roots = paths
+            .iter()
+            .map(|path| {
+                let path = path.to_str().ok_or("资料路径编码无效")?;
+                let resolved = self.path(path, false)?;
+                if !resolved.exists() {
+                    return Err("只读资料不存在".into());
+                }
+                let is_dir = resolved.is_dir();
+                Ok((resolved, is_dir))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut child = self.clone();
+        child.mode = "plan".into();
+        child.readonly = Some(ReadOnlyBoundary { roots, web });
+        Ok(child)
+    }
+
     pub fn path(&self, raw: &str, write: bool) -> Result<PathBuf, String> {
+        if let Some(lease) = &self.read_lease {
+            lease.validate()?;
+        }
         let path = resolved(&self.workspace.join(raw))?;
+        if let Some(boundary) = &self.readonly {
+            if write
+                || !boundary.roots.iter().any(|(root, directory)| {
+                    (path == *root && *directory == path.is_dir())
+                        || (*directory && path != *root && path.starts_with(root))
+                })
+            {
+                return Err("操作超出子任务只读资料范围".into());
+            }
+        }
         let workcopy = self.workcopy.as_ref().is_some_and(|copy| *copy == path);
         if !workcopy && self.protected.iter().any(|root| path.starts_with(root)) {
             return Err("此路径属于受保护的应用数据，请使用显式文档工作副本".into());
@@ -68,7 +119,21 @@ impl Scope {
     }
 
     pub fn validate(&self, request: &Request) -> Result<bool, String> {
+        if let Some(lease) = &self.read_lease {
+            lease.validate()?;
+        }
+        if let Some(boundary) = &self.readonly {
+            let allowed = matches!(request.name.as_str(), "read" | "ls")
+                || (boundary.web && crate::agent::web::is_web(&request.name));
+            if !allowed {
+                return Err("子任务仅允许已授权的只读工具".into());
+            }
+        }
         match request.name.as_str() {
+            name if crate::agent::web::is_web(name) => {
+                crate::agent::web::validate(request)?;
+                Ok(false)
+            }
             "read" | "ls" => {
                 self.path(
                     request
@@ -143,12 +208,19 @@ pub async fn execute(
     if cancel.is_cancelled() {
         return Err("操作已取消".into());
     }
+    if crate::agent::web::is_web(&request.name) {
+        return crate::agent::web::execute(request, cancel).await;
+    }
     if request.name == "bash" {
         return bash(scope, request, cancel).await;
     }
     let scope = scope.clone();
     let request = request.clone();
+    let cancel = cancel.clone();
     tokio::task::spawn_blocking(move || {
+        if cancel.is_cancelled() {
+            return Err("操作已取消".into());
+        }
         let raw = request
             .args
             .get("path")
@@ -172,6 +244,9 @@ pub async fn execute(
             }
             "read" => {
                 let text = read_text(&path)?;
+                if let Some(lease) = &scope.read_lease {
+                    lease.verify_read(&path, text.as_bytes())?;
+                }
                 let offset = request.args["offset"]
                     .as_u64()
                     .unwrap_or(1)
@@ -188,6 +263,9 @@ pub async fn execute(
                 Ok(output.chars().take(64 * 1024).collect())
             }
             "write" => {
+                if cancel.is_cancelled() {
+                    return Err("操作已取消".into());
+                }
                 write_text(&path, str_arg(&request, "content")?)?;
                 Ok("文件已写入；文档工作副本需在 Diff 中批准后才写回笔记。".into())
             }
@@ -196,6 +274,9 @@ pub async fn execute(
                 let old = str_arg(&request, "oldText")?;
                 if old.is_empty() || text.matches(old).count() != 1 {
                     return Err("原文不存在或匹配不唯一，请重新读取并提供唯一锚点".into());
+                }
+                if cancel.is_cancelled() {
+                    return Err("操作已取消".into());
                 }
                 write_text(&path, &text.replacen(old, str_arg(&request, "newText")?, 1))?;
                 Ok("修改已保存；文档工作副本仍需 Diff 审批。".into())
@@ -318,6 +399,92 @@ async fn bash(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn child_scope_cannot_inherit_parent_writes_or_expand_selected_materials() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("readonly-child-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("selected")).unwrap();
+        let root = root.canonicalize().unwrap();
+        std::fs::write(root.join("selected/source.txt"), "approved evidence").unwrap();
+        std::fs::write(root.join("sibling.txt"), "not delegated").unwrap();
+        let parent = Scope {
+            read_lease: None,
+            readonly: None,
+            workspace: root.clone(),
+            read_paths: vec![],
+            workcopy: None,
+            protected: vec![],
+            mode: "autoEdit".into(),
+        };
+        let child = parent
+            .restrict_readonly(&[root.join("selected")], false)
+            .unwrap();
+        let request = |name: &str, args| Request {
+            name: name.into(),
+            args,
+        };
+        let token = CancellationToken::new();
+        assert!(execute(
+            &child,
+            &request("read", serde_json::json!({"path":"selected/source.txt"})),
+            &token
+        )
+        .await
+        .unwrap()
+        .contains("approved evidence"));
+        for (name, args) in [
+            ("read", serde_json::json!({"path":"sibling.txt"})),
+            ("ls", serde_json::json!({"path":"."})),
+            (
+                "write",
+                serde_json::json!({"path":"selected/new.txt","content":"forbidden"}),
+            ),
+            (
+                "edit",
+                serde_json::json!({"path":"selected/source.txt","oldText":"approved","newText":"changed"}),
+            ),
+            ("bash", serde_json::json!({"command":"touch forbidden.txt"})),
+            ("webfetch", serde_json::json!({"url":"https://example.com"})),
+        ] {
+            assert!(
+                execute(&child, &request(name, args), &token).await.is_err(),
+                "{name}"
+            );
+        }
+        assert!(child
+            .restrict_readonly(std::slice::from_ref(&root), false)
+            .is_err());
+        assert!(child
+            .restrict_readonly(&[root.join("selected")], true)
+            .is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("sibling.txt"), root.join("selected/escape.txt"))
+                .unwrap();
+            assert!(execute(
+                &child,
+                &request("read", serde_json::json!({"path":"selected/escape.txt"})),
+                &token
+            )
+            .await
+            .is_err());
+        }
+        let file_only = parent
+            .restrict_readonly(&[root.join("sibling.txt")], false)
+            .unwrap();
+        std::fs::remove_file(root.join("sibling.txt")).unwrap();
+        std::fs::create_dir(root.join("sibling.txt")).unwrap();
+        std::fs::write(root.join("sibling.txt/added.txt"), "new material").unwrap();
+        assert!(file_only.path("sibling.txt/added.txt", false).is_err());
+        assert!(file_only.path("sibling.txt", false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(root.join("selected/source.txt")).unwrap(),
+            "approved evidence"
+        );
+        assert!(!root.join("selected/new.txt").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn shell_enforces_protected_paths_and_timeout() {
@@ -328,6 +495,8 @@ mod tests {
         let root = root.canonicalize().unwrap();
         std::fs::write(root.join("protected/secret"), "private-fixture").unwrap();
         let scope = Scope {
+            read_lease: None,
+            readonly: None,
             workspace: root.clone(),
             read_paths: vec![],
             workcopy: None,
@@ -367,6 +536,8 @@ mod tests {
         std::fs::create_dir_all(root.join("notes")).unwrap();
         let root = root.canonicalize().unwrap();
         let scope = Scope {
+            read_lease: None,
+            readonly: None,
             workspace: root.clone(),
             read_paths: vec![],
             workcopy: None,

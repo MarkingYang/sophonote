@@ -48,6 +48,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 anyhow = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
 regex = "1"
+html2text = "=0.17.1"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.21"
@@ -88,3 +89,8 @@ tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
+
+# Keep complete sidecar hashing within the routing probe deadline in debug builds.
+# Unoptimized SHA-256 takes seconds on bundled native binaries; checks stay intact.
+[profile.dev.package.sha2]
+opt-level = 3

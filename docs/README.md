@@ -24,7 +24,7 @@ Data directories, secrets, and sidecar boundaries are in the root README and [SE
 | [Contributing](../CONTRIBUTING.md) | Environment, PRs, Hermes sidecar, attach, packing, hygiene |
 | [License](../LICENSE) / [NOTICE](../NOTICE) | MIT; Hermes, Pi, and CPython redistribution |
 | [Security](../SECURITY.md) | Vulnerability reports; do not paste keys or notes in public issues |
-| [Current architecture diagram](./sophonote-current-architecture.html) | Shared product surface + Hermes / Pi / Claude Code; editable source: same-name `.archify.json` |
+| [Current architecture diagram](./sophonote-current-architecture.html) | WKWebView frontend layers + four engines + Volcengine OpenViking memory; editable source: same-name `.archify.json` |
 
 ## Product and architecture sources of truth
 

@@ -24,7 +24,7 @@ pub(crate) async fn locate() -> Result<Runtime, String> {
     Ok(runtime)
 }
 
-pub(crate) async fn inspect() -> Result<Runtime, String> {
+pub(crate) fn candidate_paths() -> Result<Vec<PathBuf>, String> {
     let explicit = std::env::var_os("SOPHONOTE_CLAUDE_BIN").map(PathBuf::from);
     let candidates = if let Some(path) = explicit {
         if !path.is_absolute() {
@@ -58,7 +58,11 @@ pub(crate) async fn inspect() -> Result<Runtime, String> {
         }
         paths
     };
-    let executable = candidates
+    Ok(candidates)
+}
+
+pub(crate) async fn inspect() -> Result<Runtime, String> {
+    let executable = candidate_paths()?
         .into_iter()
         .find(|p| p.is_file())
         .ok_or("未检测到 Claude Code。请先安装官方 Claude Code CLI（2.1.233 或更新版本）后重试。")?

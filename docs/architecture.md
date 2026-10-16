@@ -3,6 +3,7 @@
 > 文档状态：当前唯一技术架构真相源
 >
 > 基线日期：2026-09-15
+> 设计增补：2026-10-13 自动路由与受控协作，见 §23.13（单执行器自动路由已编码、宿主验收待完成；协作待实现）
 >
 > 适用项目：本仓库根目录
 >
@@ -10,7 +11,7 @@
 
 ## 1. 背景、目标与设计范围
 
-SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI 工作环境。系统从资讯聚合器演进为包含发现、项目任务、Markdown 笔记、隐藏知识层、Agent 记忆、工具、Browser、代码工作区、Agent Runtime、Skill 和 MCP 的单体桌面应用；**Hermes、Pi、Claude Code 是按会话选择的执行引擎，SophoNote 保持产品控制面、数据真相源、权限与审批所有权**。当前架构既要完成现有性能/发布收口，也要支撑新版“项目一级入口 + 任务执行 + 本地目录上下文与交付”的产品结构。核心挑战是：
+SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI 工作环境。系统从资讯聚合器演进为包含发现、项目任务、Markdown 笔记、隐藏知识层、Agent 记忆、工具、Browser、代码工作区、Agent Runtime、Skill 和 MCP 的单体桌面应用；**Hermes、Pi、Claude Code、OpenCode 是由 Host 自动路由、按会话绑定的执行引擎，SophoNote 保持产品控制面、数据真相源、权限与审批所有权**。当前架构既要完成现有性能/发布收口，也要支撑新版“项目一级入口 + 任务执行 + 本地目录上下文与交付”的产品结构。核心挑战是：
 
 1. 在不牺牲本地数据可靠性的前提下，让输入、预览、文档和页签切换达到写作工具应有的响应速度。
 2. 让 Inline Completion 与完整 Agent Run 复用模型配置、各自使用合适的执行协议，但保持不同的延迟、状态和生命周期。
@@ -24,6 +25,8 @@ SophoNote 是 Tauri v2 驱动、面向知识工作者的 macOS 本地优先 AI �
 10. 让会话临时绑定目录、工作室持久绑定仓库，并提供代码编辑、Git Diff、Terminal 与 Preview；外部工作树不得与受控 Markdown 的 DocumentService 写入语义混用。
 
 设计范围覆盖当前仓库的 React 前端、Tauri IPC、Rust 后端、SQLite/sqlite-vec、Markdown 文件与资产、模型调用、Agent/Skill/MCP、调度抓取、测试和发布流程。自建云端控制面、多端同步和多人协同不在当前架构范围；外部模型服务与可选火山托管 OpenViking 的接入边界属于本架构。
+
+单执行器自动路由已按 §23.13 编码并接入 Composer，真实宿主验收待完成；跨引擎子任务和有界执行图仍为目标架构，尚未实现。既有的固定会话执行链继续承担选定引擎后的原生执行。设计不要求统一原生历史或新建模型代理。
 
 ### 1.1 Rust 宿主与客户端分工（当前代码）
 
@@ -75,7 +78,7 @@ Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/Typ
 
 ### 2.1 功能需求摘要
 
-- 当前一级页面：Discover、项目（内部 Conversation）、Notes、Scheduled Tasks、Tasks，Studio 隐藏并重定向项目，Settings 为辅助入口；Inbox 保留为 Settings 子页面，旧 Library 页面停止挂载。收件箱接管旧 Library 的信息条目检索与索引能力，并作为首次拉取起严格保留 168 小时的短期池。知识层隐藏在项目/笔记/资料/会话之下提供检索、版本、证据和关系；Hermes Memory 独立保存 Agent 的目标、约束、偏好、决策和未完成状态；未来 Artifacts 只做来源对象投影。
+- 当前一级页面：Discover、项目（内部 Conversation）、Notes、Scheduled Tasks、Tasks，Studio 隐藏并重定向项目，Settings 为辅助入口；Inbox 保留为 Settings 子页面，旧 Library 页面停止挂载。收件箱接管旧 Library 的信息条目检索与索引能力，并作为首次拉取起严格保留 168 小时的短期池。知识层隐藏在项目/笔记/资料/会话之下提供检索、版本、证据和关系；Agent 长期记忆由火山 OpenViking 保存目标、约束、偏好、决策和未完成状态（§23.12）；未来 Artifacts 只做来源对象投影。
 - 多源抓取、正文与证据获取、证据化 AI 解读、日报候选和语义搜索。
 - Markdown 文档创建/编辑/预览/分屏、双链、任务、模板、资源、导出。
 - 独立 Inline Completion，支持取消、缓存、过滤和聚合指标。
@@ -101,7 +104,7 @@ Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/Typ
 1. **单仓单体、受控执行进程**：Hermes Gateway 使用 loopback WebSocket + 随机端口/Token；Pi 使用 stdin/stdout JSONL RPC；Claude Code 使用 stream-json，并通过逐 Run 鉴权的 loopback MCP 调用 Rust 工具。Hermes/Pi 随包或使用已验证私有槽，Claude Code 明确依赖本机官方 CLI。Rust 监督生命周期，产品控制面与 Markdown 真相源不下沉到引擎。
 
 2. **副作用后置于 Rust**：前端不得直连第三方 HTTP、模型或任何 Agent 引擎；WKWebView 只 invoke SophoNote。避免 CORS、密钥泄露和多套网络策略。
-3. **真相源唯一、职责分离**：`notes/<articleId>.md` 是当前正文；SQLite 保存元数据、索引、任务、Run 和审计。每个引擎在私有目录维护原生会话，Thread 保存引擎与外部会话映射；RunStore 是统一 UI/重放/恢复真相源。Hermes Memory 属于 Hermes，不把 Pi/Claude 历史冒充共享长期记忆。目标 Git 语义版本与 SQLite 投影仍与当前正文分层。
+3. **真相源唯一、职责分离**：`notes/<articleId>.md` 是当前正文；SQLite 保存元数据、索引、任务、Run 和审计。每个引擎在私有目录维护原生会话，Thread 保存引擎与外部会话映射；RunStore 是统一 UI/重放/恢复真相源。Agent 长期记忆正文由可选的火山托管 OpenViking 持有（§23.12），Hermes 原生 MEMORY/USER 关闭；不把各引擎 transcript 冒充共享记忆，也不在本地再建第二套记忆库。目标 Git 语义版本与 SQLite 投影仍与当前正文分层。
 
 4. **框架类型不外泄**：Rig、Hermes JSON-RPC/WS、Pi JSONL RPC、Claude stream-json、rmcp、Milkdown 内部类型只出现在 Adapter/Transport/ToolGateway/编辑器封装处；业务 DTO、SQLite 和前端 store 不绑定框架。
 5. **按真相源设置安全写入口**：笔记工作副本只产生 DocumentService dry-run 提案，接受后 CAS/锚点复核落盘。Pi/Claude 当前普通文件通过 Rust 工具的路径/权限/批准与原子写入；CodeChangeService/逐 hunk 代码审查为后续目标。Hermes 原生工具仍受 Host 显式范围约束。两种正文域不得旁路混写。
@@ -111,7 +114,7 @@ Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/Typ
 9. **会话视图单一内核**：完整会话页、工作室/笔记本嵌入面板与项目会话视图只共享/组合同一个无页面依赖的会话内核；发现/收件箱/工具只产生上下文交接，不渲染第二套 Chat。任何视图不得自行维护第二份 selectedThread、恢复轮询或 Channel 订阅。
 10. **作用域在发送时固定**：Rust 对当前文档/选区、目录、附件和权限重新校验，Pi/Claude Scope 随 Run 保持不变；通用 AgentScopeDescriptor/持久 ScopeSnapshot 是目标契约，尚未完整落地。导航不是授权，切页不能扩大旧 Run 的资料范围。
 11. **归属不等于复制或记忆授权**：会话归属项目只更新关系和后续默认作用域；所选引擎原生 Session ID 不变，历史摘要/成果/外部资料是否进入项目长期记忆分别由用户决定。
-12. **知识、记忆、Artifacts 分离**：隐藏知识层只提供检索/版本/证据/关系；Hermes 是记忆正文真相源；Artifacts 只保存来源引用与展示投影，不复制正文或创建第三套知识对象。
+12. **知识、记忆、Artifacts 分离**：隐藏知识层只提供检索/版本/证据/关系；火山 OpenViking 是可选 Agent 记忆正文真相源（§23.12）；Artifacts 只保存来源引用与展示投影，不复制正文或创建第三套知识对象。
 13. **代码与笔记双写路径分离**：notes 唯一经 DocumentService；当前授权代码文件由 Rust 文件工具处理。后续 CodeChangeService 可以复用 Diff 视图，不能混用文章版本/锚点和工作树 hash。
 14. **Browser 与 Preview 分离**：Browser 是通用网页协作、页面控制权归 Browser Runtime；Preview 是当前工作产物及本地服务验证、进程控制权归 Host。二者可共享渲染容器和 Agent 检查能力，但 Session、权限、生命周期和审计各自独立。
 
@@ -119,26 +122,25 @@ Tauri 2 使用系统 WebView（macOS WKWebView），前端打包静态 React/Typ
 
 ## 4. 总体架构图
 
-当前交互图：[三引擎架构 HTML](./sophonote-current-architecture.html) · [Archify 源](./sophonote-current-architecture.archify.json)。它替换旧 Hermes 目标图，依据仓库已实现的入口、Transport、模型快照、RunStore 与工具边界绘制；图中来源可定位代码。以下 Mermaid 提供同一结构的文档内概览，不表示所有引擎采用同一个原生协议或 Rust trait。
+当前交互图：[前端、引擎与长期记忆 HTML](./sophonote-current-architecture.html) · [Archify 源](./sophonote-current-architecture.archify.json)。依据已实现的前端分层、入口、Transport、RunStore、火山 OpenViking 与工具边界绘制；图中来源可定位代码。graphify 是工程维护图谱，不是产品运行时。以下 Mermaid 提供同一结构的文档内概览，不表示所有引擎采用同一个原生协议或 Rust trait。
 
 ```mermaid
 flowchart LR
-  UI["统一会话 UI / agentStore"] -->|Tauri invoke| HOST["Rust Agent Host"]
-  CFG["ai_config / Keychain"] -->|所选模型快照| HOST
+  SHELL["产品壳 App / Layout / Sidebar"] -->|路由 / 保活| SURF["会话与笔记内核"]
+  SURF -->|selector| STORES["Zustand 四隔离 Store"]
+  SURF -->|命令与订阅| IPC["tauri.ts"]
+  IPC -->|invoke / Channel| HOST["Rust Agent Host"]
   HOST -->|JSON-RPC / WS| H["Hermes Gateway"]
   HOST -->|JSONL RPC| P["Pi 独立程序"]
   HOST -->|stream-json| C["Claude Code CLI"]
-  H --> LLM["用户配置的模型服务"]
-  P --> LLM
-  C --> LLM
-  HOST -->|统一 AgentEvent v4| STORE["SQLite / RunStore"]
-  STORE -->|Channel / replay / snapshot| UI
+  HOST -->|HTTP / SSE| O["OpenCode"]
+  HOST -->|召回 / 同步| OV["火山 OpenViking 长期记忆"]
   HOST --> POLICY["Rust 工具与审批"]
   POLICY -->|Diff / CAS| DOC["DocumentService / notes/*.md"]
-  POLICY -->|授权路径与沙箱| WS["用户工作区"]
+  GRAPH["graphify 代码图谱"]
 ```
 
-Completion、embedding 等非 Agent 请求由 Rust ModelGateway/模型服务处理，继续复用配置，不经过 Agent Run；当前发现 AI 解读由 Hermes Skill/Cron 执行。Hermes 原生 Skill/MCP、Browser、电脑控制、Cron 与 Memory 属于其专属能力；Pi/Claude 的 Rust 工具不等于接入这些管理面。
+Completion、embedding 等非 Agent 请求由 Rust ModelGateway/模型服务处理，继续复用配置，不经过 Agent Run；当前发现 AI 解读由 Hermes Skill/Cron 执行。Hermes 原生 Skill/MCP、Browser、电脑控制与 Cron 属于其专属能力；Agent 长期记忆走火山 OpenViking（§23.12），不是 Hermes 本地 MEMORY，也不等于知识检索 Adapter。
 
 ## 5. 核心组件与职责边界
 
@@ -184,11 +186,13 @@ Completion、embedding 等非 Agent 请求由 Rust ModelGateway/模型服务处�
 | `notes.rs` | Markdown/frontmatter/资产文件 I/O 与历史数据迁移 |
 | `documents/repository.rs` | 文档读取、CAS version、原子写入、单文档锁的底层仓储 |
 | `documents/service.rs` | Patch dry-run/apply/reject/undo、operation 状态机、revision checkpoint、启动恢复 |
-| `agent/*` | 三引擎调度、原生会话映射、事件适配、RunStore 与恢复；不可用时独立失败，无跨引擎/Rig 回退 |
+| `agent/*` | 四引擎调度、原生会话映射、事件适配、RunStore 与恢复；不可用时独立失败，无跨引擎/Rig 回退 |
 | `agent/hermes/*` | Gateway Client Surface、随包/私有更新槽、原生能力与工作副本适配 |
-| `agent/pi/*` | Pi RPC；也承载 Pi/Claude 共用的 Run 准备、配置快照、claim、审批与文件工具 |
+| `agent/pi/*` | Pi RPC；也承载 Pi/Claude/OpenCode 共用的 Run 准备、配置快照、claim、审批与文件工具 |
 | `agent/claude/*` | 官方 CLI 检测、Anthropic/DeepSeek 快照适配、stream-json 与逐 Run loopback MCP |
-| `agent/runtime_updates.rs` | Pi 私有版本安装与 Claude 官方更新器策略；Hermes 更新仍由 Hermes 模块维护 |
+| `agent/opencode/*` | OpenCode 认证 HTTP/SSE、私有 HOME、Host MCP 桥 |
+| `agent/openviking.rs` | 火山云端记忆配置、目录编辑、Pi/Claude/OpenCode 轮前召回与成功同步；详见 §23.12 |
+| `agent/runtime_updates.rs` | Pi/Claude/OpenCode 更新入口；Hermes 更新仍由 Hermes 模块维护 |
 
 | `model/*` | Provider 配置、OpenAI-compatible 请求、ModelGateway、重试和 prompt 版本 |
 | `tools/*` | 内置项目/文档工具、ToolGateway、结构化 ToolOutput、MCP 封装 |
@@ -291,7 +295,7 @@ Editor docChanged/光标稳定
 
 执行进度的等待提示基于当前 Run 已接收事件的最后时间戳，前端计时器仅负责显示经过时间；没有新事件不等于引擎失败。工具计数使用真实调用数，归并行数只表示动作分类。此展示层不改写 Run 状态，不绕过既有 reconcile、审批或 DocumentService。
 
-`agent_run_start` 先解析 Thread 的 `engine`，默认 Hermes。首次 Run 固定引擎；Pi/Claude 共用 `agent/pi/mod.rs` 中的准备与 claim，随后分派各自 Transport。Hermes 使用既有 `AgentEngine`/Surface Adapter；当前不是三个引擎都实现该 trait。运行记录保留实际引擎与版本。
+产品发送使用 `agent_submission_auto_start`，不传引擎选择；Host 按 §23.13 自动准备并派发一次。旧兼容入口 `agent_run_start` 先解析 Thread 的 `engine`，默认 Hermes。首次 Run 固定引擎；Pi/Claude 共用 `agent/pi/mod.rs` 中的准备与 claim，随后分派各自 Transport。Hermes 使用既有 `AgentEngine`/Surface Adapter；当前不是三个引擎都实现该 trait。运行记录保留实际引擎与版本。
 
 ```mermaid
 sequenceDiagram
@@ -300,8 +304,8 @@ sequenceDiagram
   participant Engine as 所选原生引擎
   participant Store as RunStore
   participant Tools as Rust 工具与文档审批
-  UI->>Host: thread + engine + provider/model + scope + attachments
-  Host->>Host: 校验固定引擎、模型白名单、权限与 Run claim
+  UI->>Host: clientRequestId + thread + provider/model + scope + attachments
+  Host->>Host: 登记提交、约束路由、校验模型/权限并原子 claim
   Host->>Host: 校验并固定本轮文档/附件/目录与权限
   Host->>Store: Run / 用户消息 / 引擎元数据
   Host->>Engine: 模型快照 + 原生会话 + 用户输入
@@ -510,7 +514,7 @@ TextAnchor 必须唯一匹配。安全 rebase 仅在版本变化但锚点仍唯�
 - 启动顺序：注册 sqlite-vec → 初始化 schema → Markdown 迁移 → 恢复 prepared document operations → 启动 scheduler → 异步论文转换/正文补抓 → 创建窗口/托盘。旧本地 `McpManager` 不注册到产品运行时。
 - 前端 `initialize()` 依次加载 settings、sources、items、tasks、articles 和 stats；模块级 in-flight 防 StrictMode 双初始化。
 - `activePage` 始终在前。轻量页（发现/会话/计划任务/工具/设置）切换即卸载。DEC-047：笔记本与 AI 工作室是重型工作区，访问后按 LRU 最多保活两个。隐藏态同时使用 `hidden`+`inert`+`aria-hidden`、退出焦序、暂停该页 window 快捷键与补全，并把 `NativeBrowserSurface` 子 WebView 停泊到屏外 1×1；不得只靠 `display:none` 而让原生子 WebView 留在上一帧矩形上盖住当前页。
-- 窗口关闭当前隐藏到托盘，不立即退出；Hermes 自身负责其 MCP 生命周期与子进程清理。
+- 窗口关闭当前隐藏到托盘，不立即退出；macOS Dock/Finder 的再次打开事件恢复主窗口（显示、取消最小化、聚焦），不重新启动 Runtime 或重建会话。Hermes 自身负责其 MCP 生命周期与子进程清理。
 - `AppShell` 只负责页面入口策略；完整 `ConversationCore` 仅在会话页或工作室/笔记本嵌入面板展开时挂载。运行状态由会话列表/消息呈现，不在 Header 重复放置徽标。发现、收件箱、Artifacts 和工具不因全局 Agent 能力常驻 token 流视图。
 - 一级会话页与嵌入面板切换时只改变 view/selectedThread 引用，不销毁 Run 或重复调用 history/recovery；恢复控制器以 Thread 为键，整个前端只能有一个实例负责同一 Thread 的非终态追平。
 - `ContextHandoff` 是短生命周期导航载荷；用户选择“新建会话/加入会话”后即转换为 Thread 的 pending context references，发送前由 Rust 解析，消费后清除 UI 草稿，不能被 Zustand persist 作为长期权限保存。
@@ -713,7 +717,7 @@ SophoNote 是本地单用户应用，不提供多实例高可用或服务端 SLA
 9. **轻量版本证据基础（P1C）**：先上线 ResourceBudgetManager、Hot/Warm/Cold 分层、FTS-only 降级、受管 notes 仓库、语义版本和 EvidenceAnchor；向量只扩到活跃工作集，再开放 Claim/Decision、ChangeImpact 与 Memory evidence binding。
 10. **按测量演进**：若 P0 后长文仍不达标，再引入 Worker 预处理、块级增量预览、视口虚拟化或持久关系索引。
 11. **Transport 口径**：产品会话固定使用 Hermes Gateway JSON-RPC/WebSocket；旧 Runs HTTP/SSE 只允许保留为隔离的迁移测试资产，不得回到产品路径。
-12. **仍不引入**：第二套 Python/LangGraph 控制面、通用远程 Agent 云、把 SophoNote 产品控制面交给第三方 Runtime，或将 PostgreSQL/OpenSearch/OpenViking 作为 V1 必选依赖。唯一 Python 进程是随包签名且被 Host 监督的 Hermes 实现；云能力仅在跨设备/协作、账号加密和运维模型成立后重评。
+12. **仍不引入**：第二套 Python/LangGraph 控制面、通用远程 Agent 云、把 SophoNote 产品控制面交给第三方 Runtime，或将 PostgreSQL/OpenSearch/本地 OpenViking 进程作为 V1 必选依赖。唯一 Python 进程是随包签名且被 Host 监督的 Hermes 实现；火山云端记忆是可选外发（§23.12），不是启动依赖。
 
 ## 17. 部署、环境与基础设施
 
@@ -977,6 +981,8 @@ Pi/Claude 共用 Rust 文件审批与 macOS 命令沙箱（逐次批准、60 秒
 
 #### 17.5.3 火山云端记忆配置与编辑
 
+长期记忆分层、四引擎接入、Run 生命周期与安全边界见 **§23.12**。本节只记录设置页、凭据与云端编辑的部署事实。
+
 协议依据：[官方云端 CLI 配置](https://github.com/volcengine/OpenViking/blob/main/docs/zh/getting-started/05-cli-setup.md)、[内容 API](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/content.py)。
 
 `Settings → AIProviderSettingsPanel（记忆）→ OpenVikingSettingsPanel → Tauri agent_openviking_* → Rust agent/openviking`。服务固定为 `https://api.vikingdb.cn-beijing.volces.com/openviking`，仅配置 API Key；Host provider 为 `openviking-memory`，凭据不进入 YAML、源码、日志或状态 DTO。管理页面通过 Rust 直连云端 `/api/v1/fs/ls`、`/api/v1/content/read`、`/api/v1/content/write`；限定 `viking://~/memories` 与 `viking://~/peers/hermes/memories` 及 Pi/Claude Code/OpenCode 三个固定 peer 的 memories 根范围，拒绝路径穿越/编码歧义及其它目录，分页和正文均有界，HTTP 禁止重定向。revision 对原始全文（含服务端 MEMORY_FIELDS）计算摘要；编辑/写入只提供正文，避免云端重复附加元数据；回读核验正文，保留新的完整 revision。保存先重读比对，冲突保留草稿。Host 串行编辑与配置变更，但上游 write 尚无原子 CAS，仍存在外部客户端在检查后修改的竞争窗口；不把本地互斥描述成服务端锁。
@@ -1073,7 +1079,8 @@ CI 入口为 `.github/workflows/pack.yml`：`macos-14` 打 Apple Silicon pack，
 | 内容来源 | API 限流、网络可达性、页面变化 | 节流、镜像、partial/failed、质量门禁 |
 | WKWebView/Tauri | 浏览器差异、CORS、生命周期 | 网络走 Rust、真实宿主验收、错误浮层 |
 | Git Provider（目标优先 `gix`） | 大仓库性能、损坏对象、平台差异、对象泄密 | `VersionStore` 适配器隔离、纯 Rust 内嵌实现、授权 ref/排除规则、完整性检查；禁止拼接 shell Git 命令 |
-| 可选 Context Adapter / OpenViking | 第二 Python 进程、打包/签名、峰值内存、磁盘放大、配置漂移 | 不是 V1 依赖；只经 `ContextStoreAdapter`；完整进程树进入同一 1 GiB Envelope；钉版本实测且可独立停用，不能以 cache 配置代替峰值门禁 |
+| 火山托管 OpenViking（Agent 记忆） | 密钥外发、跨客户端写入竞争、服务可用性、不承诺项目隔离 | 可选能力，不是启动依赖；Rust 直连固定 HTTPS，不启动本地进程；失败不阻断主任务；详见 §23.12 |
+| 可选本地 Context Adapter | 第二 Python 进程、打包/签名、峰值内存、磁盘放大、配置漂移 | 与云端记忆分开评估，不是 V1 依赖；只经 `ContextStoreAdapter`；完整进程树进入同一 1 GiB Envelope；钉版本实测且可独立停用 |
 
 ## 19. 技术选型与 Trade-off
 
@@ -1195,7 +1202,7 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 
 ## 23. 专题实现说明
 
-本节补足总体架构无法展开的七条关键链路。内容已对照当前代码、历史设计与 2026-08-18 知识库需求核验；“目标”项仍需按项目台账推进，不得当作已完成。
+本节补足总体架构无法展开的关键链路。内容已对照当前代码、历史设计与 2026-08-18 知识库需求核验；“目标”项仍需按项目台账推进，不得当作已完成。Agent 长期记忆体系见 §23.12。
 
 ### 23.1 Agent Runtime：统一 Host 与四种执行引擎
 
@@ -1212,7 +1219,8 @@ D2/D3 通过只能说明“开发附着可用”，不能替代 D4。正式发�
 | Claude Code | `claude/transport.rs`；官方 CLI stream-json，逐 Run loopback MCP | 本机官方 CLI，隔离 HOME/原生历史；不使用个人订阅登录、全局插件/hooks |
 | 事件与恢复 | 各 Adapter → `AgentEvent` v4 → DurableFirstTransport → RunStore → Channel | 不向前端泄漏原生协议；先落库后展示；恢复差异见 §7.4 |
 | 工具与文档 | Rust 冻结 Scope、审批/沙箱；文档工作副本经 DocumentService dry-run/CAS/hunks | Pi/Claude 复用 Host 工具，不执行 Hermes 项目 actions；无 notes 直接写旁路 |
-| 原生扩展 | Hermes Skill/MCP、Browser、电脑控制、Cron、Memory | 不把 Hermes 管理面声明为三引擎通用；Claude 内部工具桥不等于用户 MCP 管理器 |
+| 原生扩展 | Hermes Skill/MCP、Browser、电脑控制、Cron | 不把 Hermes 管理面声明为四引擎通用；Agent 长期记忆见 §23.12，不等于 Hermes 本地 MEMORY |
+| Agent 长期记忆 | 火山 OpenViking；Hermes 原生插件，Pi/Claude/OpenCode 由 Host 召回/同步 | 不启动本地 OpenViking；不把原生会话历史当作共享记忆 |
 
 历史 Rig `AgentRun`、Adapter 与双跑夹具只供工程验证，不注册 Tauri 产品命令或任何运行时回退。现有 Hermes `AgentEngine` trait 不强行扩展成三引擎统一实现：Pi/Claude 共用 `pi/mod.rs` 的 Run 准备/claim，再进入各自 Transport。统一的是业务契约和产品体验。
 
@@ -1240,6 +1248,14 @@ Hermes 原生会话持续由 Gateway 管理；Pi/Claude 每轮启动进程并打
 
 本阶段不改变 §23.1 的运行隔离与 §23.1.6 的 Hermes Cron 所有权。跨引擎安装/配置写入、统一定时执行需后续适配和任务迁移门禁，不因界面筛选器存在就宣称已兼容。
 
+#### 23.1.2.2 三引擎只读联网（2026-09-23）
+
+Pi、Claude Code、OpenCode 默认暴露同一组 `websearch`、`webfetch`、`news_search`，由 Rust Host 执行 HTTP，经既有 Pi RPC / Claude、OpenCode 私有 MCP 返回结果和 RunStore 工具事件。三种权限模式均允许只读联网，不要求先批准命令或配置额外模型密钥。网页内容属于外部数据，不能赋予工具权限；正文写回仍经 DocumentService。
+
+搜索采用 [OpenCode 1.18.31 的公开 Exa MCP 接口](https://github.com/anomalyco/opencode/blob/v1.18.31/packages/opencode/src/tool/mcp-websearch.ts)，失败时尝试同上游支持的 Parallel 搜索并明确来源与失败信息；新闻查询注入本机日期及请求的时间范围、优先实时抓取，要求模型核对发布时间并引用原文，不把索引日期或查询范围当作已证实的发布日期。抓取允许 HTTP/HTTPS，不设置网站白名单，不携带浏览器 Cookie 或模型密钥；保留最终 URL、访问时间及内容类型，HTML 转可读文本并保留链接。不执行页面脚本或绕过登录，二进制内容明确报不支持。请求具备取消、超时、重定向和 5 MiB 响应上限，工具上下文有界并显式标记截断；代理沿用 Host HTTP 环境。
+
+此项对齐上游联网用途，但不宣称三个引擎原生工具完全相同：Pi 通过扩展工具提供联网，Claude 的供应商专用 WebSearch 不保证可用于 DeepSeek 等第三方模型，因此统一 Host 搜索使三者在同一模型下可用。个人插件、hooks、MCP 的自动扫描不是联网前提，仍遵循已有隔离边界。
+
 #### 23.1.3 Hermes 原生 Skill/MCP 与共享文档写入边界
 
 以下原生 Skill、MCP 管理和附件 RPC 为 Hermes 专项。Pi/Claude 通过 Rust 工具桥及显式文档工作副本接入同一审批/写入边界，不加载 Hermes Skill 或项目 actions，也不开放用户全局 MCP 配置。
@@ -1262,7 +1278,7 @@ Hermes 原生会话持续由 Gateway 管理；Pi/Claude 每轮启动进程并打
 
 **已完成（Hermes Surface）**：产品路径连接真实 `hermes serve` Gateway；Thread↔stored Session 1:1；创建/恢复、原生历史与 Memory、模型切换、图片/文件、Skill dispatch、取消、审批、澄清及完整过程事件已接入；SophoNote 不再传 system、历史副本、Skill 正文、Memory key、工作区 XML 或模型可见 Lease。Hermes 未配置时明确失败，不回退 Rig。
 
-**未完成**：Developer ID 公证/独立干净 VM、Windows 实机；Hermes 独立 Desktop 续写导入与完整断线对账场景、通用 Session-bound 产品能力通道和 Rig 清债；Pi 云端 OpenViking、Claude 实际升级仍未验收。当前文档/选区工作副本 Diff 已接入三引擎，不再列为未实现；其更多真实写入场景仍按 NEXT-040/075 验收。
+**未完成**：Developer ID 公证/独立干净 VM、Windows 实机；Hermes 独立 Desktop 续写导入与完整断线对账场景、通用 Session-bound 产品能力通道和 Rig 清债；Claude 实际升级仍未验收。四引擎云端 OpenViking 配置、浏览编辑、Host 召回与成功同步已接入（§23.12 / NEXT-074），真实模型对话端到端仍待凭据授权。当前文档/选区工作副本 Diff 已接入三引擎，不再列为未实现；其更多真实写入场景仍按 NEXT-040/075 验收。
 
 **已完成（Pi / Claude）**：官方运行时适配、独立原生历史、同一 DeepSeek 配置与回复组件、Rust 审批/沙箱/文档 Diff、统一更新页。真实 Tauri 内 Pi/Claude 各两轮 DeepSeek 验证历史、中文列表/代码、reasoning/message 增量与单一终态通过；具体测试范围、preview.8 发布和未验收项见 NEXT-075。
 
@@ -1791,7 +1807,7 @@ DEC-036 覆盖旧 DEC-010：**删除项目只移除项目元数据与历史 `pro
 
 ### 23.7 冻结参考：旧自适应知识库、Git 版本与证据层
 
-DEC-027～029 后，本节只保留为隐藏知识层的技术研究输入，不是 Library UI 实现目标。旧 Library 页面已经废弃，其信息条目能力归并原 Settings/Inbox，且 Inbox 不进入一级导航；知识层只服务项目、笔记、资料、会话与未来 Artifacts 投影的检索/版本/证据/关系，Hermes 独立承担 Agent Memory。不得仅依据本节恢复旧入口、创建独立知识列表或把知识对象复制成记忆。
+DEC-027～029 后，本节只保留为隐藏知识层的技术研究输入，不是 Library UI 实现目标。旧 Library 页面已经废弃，其信息条目能力归并原 Settings/Inbox，且 Inbox 不进入一级导航；知识层只服务项目、笔记、资料、会话与未来 Artifacts 投影的检索/版本/证据/关系。当前 Agent 长期记忆正文由火山 OpenViking 持有（§23.12），不是本节的本地 Context Adapter，也不是 Hermes 磁盘 MEMORY。不得仅依据本节恢复旧入口、创建独立知识列表或把知识对象复制成记忆。
 
 ### 23.8 收件箱 7 天 TTL 与长期记忆边界
 
@@ -1799,12 +1815,12 @@ DEC-027～029 后，本节只保留为隐藏知识层的技术研究输入，不
 - 数据源重复返回同一稳定 `item.id` 时，只更新元数据、`fetched_at` 兼容字段和 `last_seen_at`；手动刷新、自动刷新、阅读、收藏、归档均不得修改 `first_fetched_at` 或 `expires_at`。
 - 所有收件箱查询必须在 SQLite 层追加 `expires_at > datetime('now')`，不能依赖前端缓存隐藏。列表采用 `limit + offset` 分页，关键词筛选也在 SQLite 执行，取消固定 300 条窗口。
 - 应用启动与每轮抓取完成后清理过期条目。清理范围包括 `items`、`item_contents`、`item_chunks`、收藏关系、发现临时引用及条目/分片向量，并在清理后重建故事聚合；已由条目沉淀形成的 Markdown `articles` 只解除 `item_id` 关联，不删除正文。
-- 长期保留只允许通过项目文档、笔记、会话成果或受治理的 Hermes Memory 写入完成。收件箱状态不是长期保留策略，收藏也不豁免 TTL；隐藏知识层不建设 Library 展现层，未来 Artifacts 只投影来源对象。
+- 长期保留只允许通过项目文档、笔记、会话成果或用户授权的 OpenViking Agent 记忆写入完成。收件箱状态不是长期保留策略，收藏也不豁免 TTL；隐藏知识层不建设 Library 展现层，未来 Artifacts 只投影来源对象。
 
 本节吸收《Sophonote 自适应知识库技术设计及需求文档》中“知识对象、版本证据、变更影响和可治理检索”的核心意图，但按 SophoNote 已有架构做如下收敛：
 
-- V1 保持 macOS 本地单用户，不引入 PostgreSQL、OpenSearch、远程 Knowledge Service 或 OpenViking 作为启动依赖。
-- `.md` 仍是正文真相源，Git 是语义版本真相源，SQLite 是可重建的元数据/检索/治理投影，Hermes 是 Session/Memory 真相源。
+- V1 保持 macOS 本地单用户，不引入 PostgreSQL、OpenSearch、远程 Knowledge Service 或本地 OpenViking 进程作为启动依赖。火山云端记忆是可选外发能力，见 §23.12。
+- `.md` 仍是正文真相源，Git 是语义版本真相源，SQLite 是可重建的元数据/检索/治理投影，各引擎原生 Session 是会话历史真相源，火山 OpenViking 是可选 Agent 长期记忆正文真相源。
 - 知识库只建立 `memory_evidence_links`，不镜像 Hermes Memory 正文；因证据变化而失效时，标记外部引用待复核，不静默改写记忆。
 - 默认执行面是 Rust + SQLite 的 Native Lite：Hot 目录层小而常驻，Warm 工作集按字节配额缓存，Cold 原文/版本从 SSD 按需读取。第三方 Context Database 只能是可停用 Adapter。
 - memory-entry、PDF 页、chunk、Claim 和会话消息是不同计量对象；任何容量报告必须分开记录，禁止以“页数=记忆数”或“文档数=常驻内存”估算。
@@ -2023,8 +2039,8 @@ Claim 是“可被证据支持或否定的知识陈述”，Decision 是 Claim �
 
 - 会话中的普通助手文本、用户原话和工具输出不自动升格为知识或 Memory；用户确认“沉淀”后，先产生 Markdown/Artifact 和语义版本，再建立 Claim/Evidence，最后才可生成有界 Memory 候选。
 - PDF 页、抽取 chunk、网页正文和 Git blob 永远是 Knowledge Resource，不因可检索就转成 Memory。一个资料可有大量 chunk，但通常只产生 0～少量已确认 Claim/Decision/Memory。
-- Hermes Memory 只存稳定用户偏好/约束、项目目标/当前状态、已确认 Decision、未完成事项和最新成果摘要。每次里程碑最多生成少量候选，必须有 scope/evidence/expiry 并由用户确认。
-- Memory 引用变 stale 后，SophoNote 只通过 Hermes 正式 Memory API 发起“复核/更新/保留历史”操作；不直接写 Hermes 私有存储。
+- OpenViking 记忆只存稳定用户偏好/约束、项目目标/当前状态、已确认 Decision、未完成事项和最新成果摘要。每次里程碑最多生成少量候选，必须有 scope/evidence/expiry 并由用户确认；自动同步的会话提取不能冒充已确认知识。
+- Memory 引用变 stale 后，SophoNote 只标记外部引用待复核，经用户确认后再改云端记忆正文；不静默改写，不把 Claim 正文复制进 OpenViking。
 
 #### 23.7.7 Tauri 命令与前端交互
 
@@ -2171,12 +2187,12 @@ query + scope/version filters
 - 不构建全 chunk 常驻 HNSW；当前文档/固定资料/近期项目向量在磁盘按 scope/project/document 分片，查询只映射/读取候选页。SQLite `cache_size` 使用明确字节预算，`mmap_size` 必须受限并计入进程 RSS，不以 OS page cache 规避门禁。
 - FTS 是永远可用的第一阶段；向量只重排粗召回候选。语义无关键词时可分页扫描 L0 文档摘要分片，不加载全库 chunk 向量。历史版本精确查询直接走 Git/SSD，允许更慢，不因此把历史索引永久升温。
 - PDF/附件导入逐文件、逐页流式解析；OCR 单页串行，Embedding 小批处理且每批缓冲有上限。默认使用远端 Embedding 或纯 FTS，不把本地模型常驻作为基础能力。任务取消或 lease 被抢占后保存页级 checkpoint，可续传而不是保留整份中间结果。
-- 长期 Memory 正文仍在 Hermes 磁盘存储；SophoNote 常驻的只是 ID、scope、短摘要、evidence/status。一次召回默认最多加载 32 条候选、64 KiB Memory 文本，再由 ContextAssembler 按 token 预算裁剪。每个里程碑最多生成少量候选，优先合并/supersede 旧记忆，禁止逐消息写入。
+- Agent 长期记忆正文在火山 OpenViking（§23.12）；SophoNote 常驻的只是 ID、scope、短摘要、evidence/status，不镜像云端全文。一次 Host 召回有界读取参考文本，再按 token 预算裁剪。每个里程碑最多生成少量候选，优先合并/supersede 旧记忆，禁止逐消息写入。本地 Hermes MEMORY 磁盘不再作为产品真相源。
 - 查询、导入、影响分析、Memory 压缩共用 512 MiB 瞬时池；不通过“后台进程独立”获得额外预算。更大物理内存只允许系统更从容，不提高上述上限或并发。
 
-**五、OpenViking/Context Adapter 的位置**
+**五、本地 Context Adapter 的位置（不是当前云端记忆）**
 
-OpenViking 不是 V1 默认实现，也不是 Memory 真相源。若未来 Native Lite 在黄金问题上不达标，只能通过 `ContextStoreAdapter` 接入：
+当前产品的 Agent 长期记忆是火山托管 OpenViking（§23.12），由 Rust HTTP 客户端访问，不在本机启动 OpenViking。本节只约束**未来可选的本地知识检索 Adapter**：它不是 Memory 真相源，也不是 V1 默认实现。若 Native Lite 在黄金问题上不达标，只能通过 `ContextStoreAdapter` 接入：
 
 ```text
 ContextStoreAdapter:
@@ -2371,6 +2387,11 @@ preview_sessions {
 
 #### 23.9.6 权限模式与审批映射
 
+当前实现缺口（NEXT-076 宿主补测）：下表仍是统一权限合同，不能当作四引擎全部已达标的事实。Hermes 的 `start_hermes` 目前仅验证权限模式枚举，`RunEnvelope` 与原生 Session RPC 未承载该模式；真实 Ask 请求出现 `write_file` 未经审批落盘。Pi/OpenCode 的 Host 工具审批证据不能覆盖 Hermes。必须补齐原生执行前权限/作用域约束，并以 Ask 未批准不落盘、Plan 写入拒绝及取消复验关闭；在此之前 S1 不满足权限验收门槛。
+
+修复实现合同：随包 Hermes 增加版本化 Host 工具协议；每轮以非模型可见 RPC 字段传递短期环回工具地址与凭据，模型不接触授权信息。Host 在提交前确认协议版本；Hermes 顺序/并发工具执行入口均委托 Rust，缺少本轮授权或工具不在白名单时拒绝，不退回原生文件/终端或原生委托。Rust 复用 Scope/审批/受控命令执行，范围覆盖授权工作区、显式附件和单一文档工作副本，受管笔记仍只能经 DocumentService。工具服务与 Run 取消令牌同寿命，旧授权随服务销毁失效；恢复需新一轮授权。 真实 Gateway 的轮前 MCP 刷新会重建工具列表；有 Host 租约的 Agent 必须跳过原生重建，并在同一工具锁下发布 Host 快照及复核在途刷新，防止旧 tool_search/tool_call 重新覆盖受控列表。原生未适配工具明确不可用，不能按提示词“只读”放行。 当前实现已接通该协议及 Rust Host 通用工具；原生 slash/Skill 展开可能在工具循环前执行 quick command、插件或 inline shell，因此在受控普通任务入口准备阶段明确拒绝，不能只检查返回类型。原生 MCP/电脑/Cron 工具尚未映射到该受控工具面；能力目录的原生注册信息不等于本轮可执行权限，完整能力恢复仍属待办。602 项 Rust、5 项 Python 入口合同及真实随包 AIAgent 的本地模型→Host RPC→拒绝结果链路通过，真实云端已复现并修复轮前 MCP 工具刷新覆盖问题；新增真实 AIAgent 刷新回归先失败后通过，旧工具尝试被 Host 拒绝且未落盘。最终补丁包凭据已恢复，真实文本回复成功；原会话仍未提交 Host write，最终工具清单/静态提示缓存与界面审批链仍待定位验收。不能把旧工具拒绝当作审批卡链路通过。用户要求本轮收尾，当前保留此限制，未解除原生工具保护。
+
+
 | 动作 | Plan | Ask before changes | Accept edits |
 |---|---|---|---|
 | 读取绑定内普通文本/Git 状态 | 允许 | 允许 | 允许 |
@@ -2490,6 +2511,475 @@ AppliedPricingSnapshot → UsageLedger → Analytics DTO
 
 **Trade-off**：不采用 Tauri 悬浮置顶卡方案（快但非原生，搁置备用）；首期不做 APNs push 刷新（reload + 启动对账覆盖单用户本机场景）；不为投影复制完整状态机（双份实现必然分叉，对账成本高于最小写入）。
 
+### 23.12 长期记忆：火山托管 OpenViking
+
+产品需求见 [PRD §7.6.1 AG-27](./PRD.md)，进展见台账 NEXT-074。本节是 Agent 长期记忆的现行体系，替换“Hermes 本地 MEMORY 即长期记忆”和“OpenViking = 本地知识 Adapter”两种过时口径。
+
+#### 23.12.1 分层：记忆不是知识，也不是会话历史
+
+| 层 | 真相源 | 当前职责 | 明确不是 |
+|---|---|---|---|
+| 知识层 | `notes/<id>.md`、SQLite 索引、目标 Git 语义版本 | 检索、版本、证据、关系 | 不是 Agent 记忆，不提供独立 Library |
+| 会话历史 | 各引擎原生 Session + RunStore | UI 重放、续聊、故障恢复 | 不是跨引擎共享记忆 |
+| Agent 长期记忆 | 火山 OpenViking memories | 偏好、目标、约束、决策、未完成状态、成果摘要 | 不是笔记正文库，不是 PDF/chunk |
+| 收件箱 | `items` 168 小时 TTL | 短期外部信息池 | 收藏/阅读不续期，不能冒充记忆 |
+| 目标治理投影 | `memory_evidence_links` | 记忆与 Claim/证据的引用绑定 | 不复制记忆正文 |
+
+DEC-013 的 Thread↔原生 Session 1:1 仍然成立：短期会话状态由所选引擎维护。DEC-030 的知识/记忆分层仍然成立：记忆层属于 Agent，不属于隐藏知识层。变化的是记忆**正文**改由火山 OpenViking 持有，Hermes 原生 `memory_enabled` / `user_profile_enabled` 固定关闭。
+
+#### 23.12.2 当前产品路径
+
+- 可选外发能力，**不是启动依赖**，未配置时四引擎照常工作。
+- 服务固定 `https://api.vikingdb.cn-beijing.volces.com/openviking`，Host provider `openviking-memory`；只配 API Key，不提供本地 endpoint / 账户覆盖，不启动本地 OpenViking 进程。
+- 入口：`设置 → AI 配置 → 记忆`。命令：`agent_openviking_*` → `agent/openviking.rs`。
+- 四引擎共用一把 Key，peer 范围分开；`memory.sophonote_engines` 保存明确授权的 Host 引擎列表，旧配置缺省为空，不自动扩大到 Pi/Claude/OpenCode。
+- 不把配置保存、连接检查或本地会话续接宣称为跨引擎云端召回。
+
+```mermaid
+flowchart TB
+  subgraph product [SophoNote 本机]
+    UI["记忆页 / 会话"]
+    Host["Rust Host"]
+    H["Hermes 插件"]
+    PCO["Pi / Claude / OpenCode"]
+  end
+  subgraph cloud [火山 OpenViking]
+    Shared["viking://~/memories"]
+    Peers["peers/hermes|pi|claude_code|opencode"]
+  end
+  UI -->|浏览 / 显式编辑| Host
+  Host -->|HTTPS 限域| Shared
+  Host --> Peers
+  H -->|原生同步 / 提取 / 召回| Shared
+  H --> Peers
+  PCO -->|Host 轮前召回 + 成功同步| Host
+```
+
+#### 23.12.3 命名空间与授权
+
+允许写入的根：
+
+| URI | 身份 | 读取 |
+|---|---|---|
+| `viking://~/memories` | 公共用户 | 已授权引擎跨读 |
+| `viking://~/peers/hermes/memories` | Hermes peer | 本引擎 + 管理页 |
+| `viking://~/peers/pi/memories` | Pi peer | 本引擎 + 管理页 |
+| `viking://~/peers/claude_code/memories` | Claude Code peer | 本引擎 + 管理页 |
+| `viking://~/peers/opencode/memories` | OpenCode peer | 本引擎 + 管理页 |
+
+拒绝 `privacy`、`sessions`、`skills`、其它 peer、路径穿越与编码歧义。管理页按所选目录设置 `x-openviking-actor-peer`。启用前必须勾选会话外发与同身份共享范围；新增 Host 引擎须再次保存四引擎确认。
+
+当前**不承诺项目隔离**。项目归属只改 Thread 关系，不自动改 OpenViking scope；跨项目污染只能靠用户选择写哪些摘要，不能靠默认全局 key 假装隔离（延续 DEC-013/017）。
+
+#### 23.12.4 四引擎接入
+
+| 引擎 | 召回 | 成功后同步 | 提取 |
+|---|---|---|---|
+| Hermes | 原生 Memory Provider | 原生插件写会话 | 云端异步提取 |
+| Pi / Claude Code / OpenCode | Host `/search/find` 查公共 + 本引擎 peer，URI 归一化后有界读取，包裹为不可信资料 | 用唯一 Run ID 建云端 session，只写原始 user 与 final assistant 两条并 commit | 云端异步；commit 成功 ≠ 召回成功 |
+
+Host 路径由 `pi::start_engine` 前后置调用 `openviking::RunMemory`。取消/失败不提交；不发送工具输出、系统提示或附件正文。配置代次在换 Key / 停用时递增，在途 Run 复核代次后停止向新库同步。
+
+```mermaid
+sequenceDiagram
+  participant UI as 会话
+  participant Host as Rust Host
+  participant Eng as 所选引擎
+  participant OV as 火山 OpenViking
+  UI->>Host: agent_run_start
+  alt Hermes 且已启用
+    Host->>Eng: 模型快照 + 原生 Session
+    Eng->>OV: 插件召回 / 同步
+  else Pi / Claude / OpenCode 且该引擎已授权
+    Host->>OV: search/find + 有界 read
+    OV-->>Host: 参考文本
+    Host->>Eng: 用户输入 + 不可信记忆上下文
+  end
+  Eng-->>Host: 流式事件
+  Host->>Host: RunStore
+  alt 成功终态且 Host 引擎已授权
+    Host->>OV: session + user/assistant + commit
+  end
+```
+
+#### 23.12.5 页面编辑与冲突
+
+记忆页可浏览、分页、读取、显式编辑公共用户与四个 peer 的 memories。正文只在页面草稿暂存，不落本地记忆库。写入前重读并核对读取时 revision；已变化则停止并保留草稿。revision 对原始全文（含服务端 MEMORY_FIELDS）计算摘要；写出只给正文，避免云端重复附加元数据。Host 串行编辑与配置变更，但上游 write 尚无原子 CAS，存在外部客户端检查后修改的窗口，不能把本机互斥说成服务端锁。编辑器不处理受管笔记。
+
+停用只清 provider、保持 MEMORY/USER 关闭，不 delete、不 reset。保存不自动重启 Hermes；已有 Run 由用户空闲时重启生效。钥匙串暂不可读不阻塞引擎启动，只停止提供云端凭据。
+
+#### 23.12.6 安全、预算与失败
+
+- 云端 HTTP 只在 Rust：固定 HTTPS、校验证书、禁止重定向、超时与响应有界，错误保留状态码，不回显正文或 Key。
+- 连接检查用已鉴权只读目录，不依赖匿名 `/health`（托管服务对匿名返回 401）。
+- 召回结果是外部数据，不能授予工具权限；笔记写回仍经 DocumentService。
+- 记忆不可用显示独立诊断，不阻断主任务、不回退 Hermes 本地 MEMORY。
+- 本机增量是 Host HTTP 客户端与有界缓冲，服务端 RSS 与 1 GiB 本地知识/记忆 Envelope **分账**。1 GiB 门禁继续约束本地 FTS/向量/导入/可选本地 Adapter，不把云端库规模算进本机 Envelope。
+
+#### 23.12.7 与本地 Adapter 的边界
+
+| | 火山 OpenViking（现行） | 本地 ContextStoreAdapter（§23.7 预案） |
+|---|---|---|
+| 用途 | Agent 长期记忆 | 知识检索加速 |
+| 进程 | 无本机 sidecar | 第二 Python 进程，未过门禁不打包 |
+| 真相 | 记忆正文在云端 | 不得保存 Claim/笔记/记忆正文 |
+| V1 | 可选，已接入配置与 Host 链路 | 不是依赖 |
+
+二者不得混用配置、不得互相回退。
+
+#### 23.12.8 未完成
+
+- 真实模型对话端到端召回（钥匙串凭据授权，见 NEXT-074/075）。
+- 项目级记忆 scope、显式跨项目授权与清除（DEC-013 仍禁止静默复用全局 key）。
+- KNOW-15：记忆与 Claim/Evidence 的引用绑定、失效复核。
+- 云端 write 的条件 CAS；跨客户端竞争窗口需产品提示，不能宣称已消除。
+- Hermes 保存后需用户重启才注入 Key，不能把“已保存”当成当前 Run 已用新凭据。
+
+<a id="agent-routing-architecture"></a>
+
+### 23.13 自动路由、SDK 适配与受控协作（DEC-054，目标架构，分期实施）
+
+本节落实 [PRD AR-01～30 与 §15.8](./PRD.md#agent-routing-prd)，交付跟踪为 [NEXT-076](./project-ledger.md#agent-routing-delivery)。当前自动提交入口已编码并自动验证；以下 S0 与影子评估说明是沿用的基础实现，S2 已有受控 Pi 父子进程与 Debug 预览包的本轮授权、原子创建和过程投影；发行构建尚未开放；S3 有界编排仍为目标合同。Hermes 是具体引擎，Harness 是执行框架类别，不混为新增产品 ID。
+
+**2026-10-14 AR-S1 首版基线（当前排序已由下述 automatic-v2 取代）**：`agent/automatic.rs` 用 `automatic-v1` 规则对未被硬排除且探测通过的候选选一个准备。通用任务优先 Hermes/Pi/Claude/OpenCode；文档范围优先 Pi/Hermes/Claude/OpenCode；显式目录 Plan 分析优先 Claude/OpenCode/Pi/Hermes。优先级不表示质量最优，原生 Skill/命令与 Session 绑定始终优先。候选并发探测和 Hermes 目录验证各有 1500ms 截止，模型不参与排序。失败不改选、不换模型/供应商。选择证据沿用逐 Run 审计，决策 schemaVersion=4；准备失败只保存固定中文指引，原生错误与凭据不进入提交快照。
+
+**automatic-v2 执行需求基线（画像提取现由下述 v3 修正）**：新增 `agent/task_profile.rs` 纯函数 `infer(&AgentRunStartArgs) -> TaskProfile`，仅查看上限 4096 字符的本轮用户请求和显式上下文存在性，不读取附件正文/目录、原生历史或凭据。输出封闭的 TaskProfile 枚举；不接收执行器路径，不授予工具权限。优先级：原生能力硬要求 → 明确内联代码解释 → 工程操作或仓库探索（要求目录）→ 研究/跟踪工作流 → 限定资料处理（要求资料范围）或文本响应 → 通用。内联代码解释归文本响应，不因附带目录被视为仓库探索。否定性片段不作为正向执行需求；只读与写入仍由 Host 原权限模式核验。研究/跟踪线索不会自动创建 Cron。
+
+`automatic.rs` 以画像和已选供应商原生协议计算稳定偏好，与原有候选、运行时证据和 Hermes 精确映射取交集；仅权限模式改变不得改变画像或静态偏好。`RouteDecision` 升为 schemaVersion=5/policyVersion=automatic-v2，新增可选 taskProfile/preferredEngine，结合 selectedEngine 推导是否采用兼容替补，carry_preflight 必须保留这些值；旧 schema 继续可读。逐 Run 审计仍不保存用户文字、文件路径、URL 或密钥。`RunSnapshot.routing` 仅投影封闭枚举生成的中文说明、策略版本与实际引擎；缺失/无法解析的历史说明返回空，不让历史回放失败。前端独立运行详情组件在展开时按 Run ID 读取，切换会话隔离迟到响应，不在每个 token 触发查询。
+
+**automatic-v3 画像边界**：TaskProfile 推断先截取 4096 字符，再屏蔽引号、反引号代码段和 Markdown 引用行；保留原用户输入供 Adapter 执行，不改写消息。正向片段逐段判定，避免跨片段拼接无关动作和对象。与 workspaceRoot 相同的 folder 附件是导航范围，不能单独构成资料画像。明确仓库操作优先于内联解释；排序序列、候选硬过滤与权限保持 v2 合同。审计仅升级 policyVersion=automatic-v3，数据字段仍为 schemaVersion=5，v1/v2 历史解释继续可读。本地性能样本仅覆盖有界画像、候选元数据筛选与确定性选择，不计为包含运行时探测、数据库、凭据或模型的整场路由延迟。
+
+本次不引入新的外部分类请求、模型切换、动态质量分数或直接响应生命周期；文本响应的独立 ModelGateway 快路径已在后续切片接线，详见下文独立响应合同与 NEXT-076 验收状态。 Debug 构建对 sha2 单独启用优化，避免未优化的大文件完整性校验挤占 1500ms 运行时探测预算；不跳过文件哈希、不放宽截止，也不将迟到结果写入观察缓存。真实随包 Pi/OpenCode 完整性校验另用显式原生资源测试验证预算。
+
+自动提交先以 requested_engine=auto 登记不可变意图，再以 generation CAS 一次写 selected_engine；请求重放不重新排名。旧四引擎 CHECK 通过事务迁移，保留索引、触发器和请求身份。原有 native prepare 在同一 Host 内继续拥有 Runtime/凭据/作用域，claim 前复核模型配置 epoch、凭据变更 epoch 与取消代次；ai_config 插入/修改/删除推进持久 epoch，能识别改回原值的 ABA。凭据保存/删除期间不接受准备，其变化结束后才重启运行时。作用域仍由现有准备和逐工具验证、Thread 项目校验及 DocumentService CAS 执行；统一持久 ScopeSnapshot/后代撤权是 S2 前置，未冒充完成。
+
+Hermes 自动候选需匹配本 Host 成功启动的 Gateway 地址、配置/凭据代次、唯一 provider 环境前缀及明确端点（含 Host 免密钥本地代理），并通过原生 model.options 的精确 slug/model/鉴权状态验证；别名不唯一、外部附着、配置未重启同步均不猜测放行。Pi/Claude/OpenCode 复用共享模型准备。requires_key=false 的 Hermes 启动环境也不再读取历史密钥。
+
+会话提交名额在 SQLite IMMEDIATE 登记事务中统一保留，手动与自动合计 2 个，兼容统计未绑定提交的旧活跃 Run；等待准备和 recovering 都占名额，终态释放。此处覆盖 Host 会话入口，不把 Hermes 独立 Cron 作业纳入此计数，完整编排预算仍属 S2/S3。无独立排队、跨引擎回退或子任务。内部 agent.routing.enabled=false 拒绝新自动准备；产品不因此恢复手选入口。现有任务查询/停止和旧兼容 API 保留。
+
+自动提交恢复快照（AR-22）：agent_submissions 增加可空 recovery_json，仅自动提交从 Host 类型化请求保存，总大小上限 4 MiB，与身份登记同事务。通过身份、时钟、会话存在性及大小校验后，ThreadBusy/ResourcesBusy 以 state=failed、固定 failure_reason 和 recovery_json 原子登记，不占活跃名额、不给准备租约、不创建 Run/用户消息；手动兼容入口仍返回原拒绝。失败身份重放只查询原结果，即使名额释放也不重新派发；显式重发使用新 UUIDv7。无效/过期/冲突身份、缺失会话、超限输入与存储故障不生成恢复记录。查询/丢弃专用 IPC 按 clientRequestId 定位；仅无 Run 的 failed/cancelled/interrupted 可取回正文，活跃或派发未知不能作为可重发草稿。Run 绑定、Thread 墓碑与用户丢弃清除 recovery_json，去重盐/摘要仍遵守原保留规则。浏览器持久化终态恢复身份，不保存正文；执行接纳前的会话忙/名额满也返回持久终态快照，复用同一恢复入口；其余未登记拒绝仍依赖页面内存，旧记录无快照时明确提示不可恢复；页面恢复显式展示原文字、附件及文档范围，新发送生成新 ID 并重新走准备。终态草稿正文超过 7 天后，在后续接纳时清理；本地恢复身份不携带正文。草稿恢复不自动变更权限模式或工作目录；目录或权限模式不一致时停止恢复，原选区/文档版本不刷新为新版本。
+
+Composer 统一投影 AI 配置并通过 agentStore 持有提交；浏览器只持久化恢复 ID 与状态，不复制输入正文/附件。准备过程锁住同一草稿，原输入保留到 claim 确认；停止先记录意图，回包丢失只用 find/get 查询，窗口重挂载不调用 start。claim 后采用 Host selectedEngine 并接回 Run snapshot/replay；已确认极快终态不重新挂运行标记。无独立 Submission 事件流，使用有界状态查询；超时保持未知锁并提供“查询任务状态”。运行详情展示真实执行者，审批继续使用真实引擎。自动规则、持久状态和客户端契约已验证；真实 Tauri 已确认自动准备、凭据失败恢复、准备取消与运行详情。DeepSeek 凭据恢复后，Hermes/Claude 的自动首轮与原生第二轮、Claude 运行中取消、离开项目后的历史恢复已验收；持久审计确认首轮 automatic、续接 session_affinity 且引擎不改绑。云端记忆独立凭据仍报错，主任务按现有合同降级继续；automatic-v2 已验证 Pi/OpenCode 的真实 DeepSeek 自动首轮、原生续接、按需路由说明，OpenCode 运行中取消及重启后的两条会话历史/说明恢复通过；持久审计为 schemaVersion=5，首轮 automatic、后续 session_affinity。上述 v2 工程请求只确认意图；后续 v3 已在真实 Tauri 中通过合成仓库 ls/read、计算错误识别、重启后上下文续接、Plan write 拒绝和运行中取消/恢复。Pi 的引用材料翻译、续接和历史/策略恢复也已通过；事件审计与 fixture 哈希核对无额外写入。完整产品黄金任务和性能/发布门禁仍待完成。
+
+以下三段保留 S0 与影子评估的实施基础及各切片边界；当前自动执行范围以上文 AR-S1 说明为准。影子开关不控制产品自动提交入口。
+
+**AR-S0 已实现边界**：先以 Rust 封闭枚举注册表统一启动入口，保留四种原生 Transport；当前不需要动态 trait 对象或未使用的统一 prepare/reconcile 方法。手动路由结果与本次准备阶段观察到的能力写入 `agent_runs.route_decision_json`，与 Run claim 同事务、旧记录为 NULL；只记录枚举、版本、工具名和来源，不存输入正文、路径或凭据。S1 需要多候选/多决策时再迁移为独立决策表。当前快照是逐 Run 的准备证据，不是 TTL 健康缓存：Pi/Claude/OpenCode 记录已校验 Runtime 版本与当前权限模式的 Host 工具，Hermes 现有探针仅证明配置，版本/原生工具保持未知。全部委托能力保持 false。下文完整候选过滤、主动健康探测、自动选择与协作接口仍为后续合同。逐 Run 准备证据与下段的短期运行时观察缓存分开维护。
+
+**AR-S0 候选预筛选与运行时观察缓存**：每次手动派发前按会话绑定、显式选择、Hermes 原生功能、模型协议/白名单及权限模式重新计算四引擎候选，明确排除的手选请求在启动原生校验前返回原因、不创建 Run；通过预筛选并成功 claim 的结果随路由审计保存（决策 schemaVersion=2，旧记录的候选字段按缺失兼容读取）。候选只有 `excluded` 与 `needs_preparation` 两种状态；预筛选不签发执行许可，未验证凭据、具体作用域、资源及原生功能仍由所选 Adapter 校验。未知模型配置不猜测兼容，Hermes 保留原生模型目录复核。运行时观察缓存仅保存最近一次本地版本/完整性校验的证据，进程内最多四条、单调时钟 TTL 30 秒；观察文件、更新指针或 Claude 定位环境变化即失效，过期/缺失统一 unknown。缓存不读取密钥、不缓存模型/授权配置、不发起候选模型请求，不跳过每次启动的原生校验；Hermes 配置探针不进入 verified 缓存。本切片不并发启动其它引擎作探测，不启用自动选择；短截止探测与规则影子评估见下段；凭据/作用域/资源门禁及 S1 自动执行另行接入。
+
+**AR-S1 主动探测与规则影子评估已实现边界**：Debug 宿主可用 `SOPHONOTE_ROUTE_SHADOW=1` 显式开启；默认关闭，Release 不读取该开关。仍遵守手选与会话约束，仅对预筛选未排除的候选并发检查，单候选原生探测 future 截止时间 1500ms（缓存元数据检查与记录另计入总耗时），每引擎全进程最多一个探测。Pi/OpenCode 复用版本槽与完整性校验，Claude 执行现有版本检查，Hermes 仅连接已存在的 Gateway 并校验 ready 首帧；不启动 Gateway、不读模型凭据、不创建 Session、不发送用户输入、不调用模型。超时/失败/忙分别记录固定原因码；同步文件校验超时后可能仍在收尾，工作线程持有探测名额直至真实结束，迟到结果不写缓存或审计。规则按 general-v1 固定引擎顺序，仅从模型预筛选通过且本地运行时已校验的候选中建议“优先准备”；Hermes 连接成功仍缺原生模型目录合同，不进入该建议。缓存仍为运行时观察，不能证明凭据、作用域或资源可用。影子结果随原 Run 审计持久化（决策 schemaVersion=3，旧记录缺省 shadow 为 None），不改变 selectedEngine，不重放任务；尚不构成 AR-S1 自动执行交付，80 项黄金任务、真实四引擎及宿主门禁仍待完成。
+
+#### 23.13.1 分层与所有权
+
+```mermaid
+flowchart TB
+    UI[统一会话与过程轨] --> Host[Rust Agent Host]
+    Host --> Router[AgentRouter：约束过滤与选择]
+    Router --> Catalog[版本化能力与角色目录]
+    Router -.可选结构化判断.-> Model[现有 ModelGateway]
+    Host --> Orchestrator[Orchestrator：有界执行图]
+    Orchestrator --> Router
+    Router --> Registry[EngineRegistry：确定性 Adapter 映射]
+    Registry --> Hermes[Hermes Gateway Adapter]
+    Registry --> Pi[Pi RPC Adapter]
+    Registry --> Claude[Claude CLI Adapter]
+    Registry --> OpenCode[OpenCode HTTP Adapter]
+    Host --> Store[RunStore 与 Workflow 审计]
+    Hermes --> Policy[Rust Scope 与审批工具桥]
+    Pi --> Policy
+    Claude --> Policy
+    OpenCode --> Policy
+    Policy --> Document[DocumentService 与领域服务]
+```
+
+AgentRouter 决定“交给哪个合法执行器”；Adapter 决定“如何调用该执行器”；Orchestrator 决定“哪些工作先做、并行、等待或取消”。Agent 的 token/tool 循环仍由原生引擎持有，Host 不重建通用模型循环。ModelGateway 只承接无工具的路由判断等非 Agent 请求，不接管四引擎全部推理 HTTP，不新增 Node/Python 控制服务、消息中间件或 LangGraph 调度层。现有本地免鉴权兼容代理不因本设计扩大用途。
+
+首期接点是 `agent_run_start` 在原生请求提交之前的引擎解析与准备阶段。当前 `agent/engine.rs` 并非四引擎共同实现的完整接口；目标新增薄 `EngineAdapter` 门面包住既有 Hermes Surface 和 Pi/Claude/OpenCode 分支，逐步抽离 `agent/pi/mod.rs` 的公共 prepare/claim，不要求一次改写所有 Transport。
+
+轻量响应使用独立 `response_conversations` / `response_turns` 表，不写 `agent_threads`、`agent_runs` 或原生记忆。首次路由只接受没有显式工具上下文、已提供文本载荷的文本处理请求；项目默认目录只参与画像判断，不进入模型请求，续轮保持 ResponseConversation 身份。Host 以客户端 UUID、完整请求意图、项目归属去重，准备前获得数据库宿主锁；配置版本与选定模型冻结后只读取一次凭据，派发前复核。最多两个响应在途、单会话一轮，单次 HTTP 不重试、不重定向、响应体有界；ModelGateway 对解析后的 localhost 或 loopback IP 使用直连连接池，避免系统代理把本机模型请求转发出去，其他地址继续遵循原代理配置，不以字符串前缀判断；取消持久终态优先于迟到回复，宿主重启将 preparing/running 标 interrupted，不重放。用量缺失保留 unknown，错误只显示允许的分类。前端合并两类会话的导航投影，历史与执行分别读取，升级为 Agent 仅经显式的可编辑摘录，不伪造 engine 或 Run。
+
+#### 23.13.2 角色、能力快照与注册表
+
+以下为逻辑 DTO 草案，字段以双端契约实施为准：
+
+```text
+AgentProfile {
+  id, version, purpose, requiredCapabilities[], allowedEffects[],
+  outputSchemaId, preferredEngines[], maxTurns, maxDurationMs
+}
+EngineCapabilitySnapshot {
+  engineId, engineVersion, adapterVersion, runtimeGeneration,
+  checkedAt, expiresAt, health: ready | unavailable | unknown,
+  protocols[], modelCompatibility, effectiveTools[],
+  supportsHostDelegation, supportsChildIsolation, supportsMemorySuppression,
+  supportsCancellation, supportsTurnLimit, recoveryMode,
+  nativeSubagentMode: disabled | audited
+}
+RouteRequest {
+  requestId, threadId, workflowId?, executionId?, profileId,
+  mode: auto | explicit, requestedEngine?, boundEngine?,
+  providerId, modelId, scopeSnapshotId, requiredCapabilities[],
+  taskSummary, contextRefIds[], budgetReservationId, policyVersion
+}
+RouteDecision {
+  routeId, requestId, selectedEngine, profileVersion,
+  candidateSnapshotHash, reasonCode, excludedCandidates[],
+  source: explicit | session_affinity | rule | llm | rule_fallback,
+  policyVersion, runtimeGeneration, elapsedMs, routingUsageRef?
+}
+```
+
+`AgentProfile` 定义能力与成果合同，不是任意系统提示词市场；角色偏好不能扩大工具权限。Hermes 仍遵守 DEC-020：原始用户消息不被路由器重写，角色不自动注入 system prompt、Skill 正文或历史；子任务的有界任务描述属于显式委托输入，引用通过既有附件/工具桥提供。需原生角色配置时由 Adapter 声明是否支持，并单独验证。
+
+能力目录复用 `agent/capabilities.rs` 的真实数据源，但管理界面的长探测（当前可达 25 秒）不进入路由热路径。健康快照建议 TTL 30 秒，版本槽/配置/权限变化立即失效；陈旧或 unknown 状态只作为待探测，不能等价 ready。候选探测并发且有独立短截止时间，超时排除并保留原因；进入所选 Adapter 的 prepare 时再次检查实际二进制、模型协议、凭据可访问性与权限代次。Keychain 交互计为独立准备阶段，不被伪装成路由计算慢或静默切模型。
+
+注册表是 Rust 编译期白名单 `EngineId → Arc<dyn EngineAdapter>`，目前只允许 `hermes / pi / claude_code / opencode`。LLM、前端、资料内容都不能构造 executable path、导入 npm 包、填写任意 URL 或修改注册表。新增引擎要求实现 Adapter、有效能力合同和原生二进制验证；普通新角色只改版本化 Profile。
+
+#### 23.13.3 如何路由到指定 SDK / 原生协议
+
+| EngineId | 本仓库首选调用路径 | 上游 SDK 的位置 | 协作开启前的缺口 |
+|---|---|---|---|
+| `hermes` | 既有 Gateway JSON-RPC / WebSocket：原生 Session、输入、事件、取消 | 不引入新的 SDK wrapper；沿用现有 Surface Adapter | 验证逐子任务身份、只读边界、迭代上限、取消及按 Session 关闭原生记忆；不能证明则仅单 Agent |
+| `pi` | 既有独立二进制 JSONL RPC 与权限扩展 | 上游提供 `createAgentSession` 等 JS SDK；Rust 产品继续用 RPC | 新增受鉴权的委托工具与内部 Session 隔离；关闭扩展的递归委托 |
+| `claude_code` | 既有官方 CLI stream-json + 私有 MCP + 原生 Session | Claude Agent SDK 可配置 `agents`；当前产品不依赖其 JS/Python 宿主 | 当前 mapper 会忽略带 `parent_tool_use_id` 的子事件；原生子代理须先补归属映射和完整门禁，不能直接开 Agent 工具 |
+| `opencode` | 既有认证 HTTP / SSE + 私有 HOME / Session / Host MCP | 官方 SDK 是 server/client 接口，可创建 Session 和发送 prompt；Rust 直接调用受支持服务 API | 当前受控配置限制原生工具；须验证子 Session、task 权限、取消和成本映射后才开放原生委托 |
+
+官方接口依据：[Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md)、[Claude SDK Subagents](https://code.claude.com/docs/en/agent-sdk/subagents)、[OpenCode SDK](https://opencode.ai/docs/sdk/)、[OpenCode Agents](https://opencode.ai/docs/agents/)。核对日期为 2026-10-13；文档里的最新字段不自动适用于仓库钉扎的 Pi 0.85.1、Claude 最低 2.1.233 或 OpenCode 1.18.31。是否支持以实际解析到的版本与兼容测试为准。
+
+```text
+EngineAdapter（目标语义接口）
+  capabilities() -> EngineCapabilitySnapshot
+  prepare(ExecutionSpec) -> PreparedExecution
+  start(PreparedExecution, eventSink, cancellation) -> ExecutionHandle
+  respondApproval(handle, decision)
+  respondClarification(handle, answer)
+  cancel(handle) -> StopReceipt
+  reconcile(binding, lastNativeCursor) -> RecoveryObservation
+```
+
+`ExecutionSpec` 包含 Host 生成的身份、模型快照引用、作用域、工具租约、原生历史绑定、预算与原始输入/任务包引用；密钥只在受监督启动时短期注入，不出现在可序列化路由结果。`prepare` 可核验配置和创建空 Session，但不得提交任务、触发模型/工具副作用；任何例外必须声明并阻止首发自动改选。`start` 是唯一派发边界。没有同等原生能力的方法返回结构化 unsupported，不模拟成功。
+
+具体分派只相当于 `registry.get(decision.selectedEngine).start(prepared)`。模型不能直接调用 SDK；SDK/CLI 方法名、进程参数和协议适配全部在受审代码中。`resume` 不是普遍的活跃轮次续接：Hermes 按 §7.4 对账，Pi/Claude/OpenCode 按各自实际恢复策略处理；私有历史可用于下一轮不等于崩溃前工具可安全重放。
+
+#### 23.13.4 路由算法与提交边界
+
+1. Host 校验用户输入、Thread 与当前授权，冻结最小 ScopeSnapshot / 模型快照。已有原生 Session 绑定优先；手选或原生 Skill 约束有冲突即失败，不能“挑一个可用的”覆盖冲突。
+2. 从注册表快照筛选版本、协议、实际工具、权限、资源及协作能力。`requiredCapabilities` 是需求，不是授权；LLM 推断遗漏不会放宽执行期工具门禁。
+3. 零候选返回 `NO_ELIGIBLE_ENGINE`；单候选规则直达；多个候选先用版本化角色偏好形成稳定排序。AR-S0 只审计，AR-S1 才允许 LLM 在候选中选择。
+4. 路由 LLM 输入限用户任务摘要（最多 2000 字符）、上下文类型、Profile 和候选能力摘要；不载入附件正文、全量历史、密钥、工具输出或云端记忆。输出仅 `{candidateId, reasonCode}`，严格 schema、未知字段拒绝，最大 256 输出 token，硬超时 1500ms，不自动重试。无兼容 ModelGateway 路由模型时直接规则选择。
+5. Host 再验证结果属于同一候选快照；使用任意 confidence 分数均不能越过硬约束。超时/非法值只选既有合法规则候选；准备阶段的新事实使全部候选失效则失败。
+6. 按 §23.13.13～15 先锁定提交意图，事务外完成所选 Adapter prepare，再原子 claim Run 并固化路由、版本/槽、权限代次与派发意图。提交前重核授权、取消状态和预算；更新槽不能替换已准备的路径。
+7. 持久化 dispatch intent 后才调用 `start`；从“开始尝试提交”起禁止自动跨引擎回退。返回原生 Session/运行身份立即保存映射，再持久化事件并向 UI 发布。
+
+根会话一旦提交或已有原生运行即固定引擎；即使“没有看到 token”也不构成安全重试证据。S1 首版不自动改选。后续独立验收后，首次尚未提交、prepare 明确无任务副作用的自动会话才可改选剩余候选，最多 1 次，路由审计保留两次决定；显式手选不自动改选。空 Session 创建失败或清理不明时登记残留引用，不能误把 Session 创建成功当成任务执行完成。
+
+派发状态目标为 `prepared → dispatching → acknowledged → running → terminal`，另有 `dispatch_unknown`。SQLite 与外部进程/HTTP 不具备分布式事务；Host 在 dispatching 后崩溃，即使收不到 ack，也可能已经执行。恢复先按原生身份/关联号核实；无法核实则停在 unknown、阻止新派发，不宣传外部 exactly-once。幂等键只保证 Host 不重复建节点或审批；工具副作用是否可重试由具体领域服务合同决定。
+
+#### 23.13.5 Host SubAgent 工具合同
+
+资料版本核验采用 Host 保存的不可变证据清单：引用 ID 绑定 canonical 文件路径与 SHA-256，受管文档另绑定文档 ID、项目身份与正文 version。子任务读取返回的同一份字节须与清单一致；接收成果时再次核对全部输入引用的版本、可见性和可读性，资料变化返回冲突，不能把旧分析记作当前成功。清单最多 20 项、每项最多 1 MiB；目录范围不自动生成文件证据，网页引用须由联网工具另外登记获取时的版本，不接受模型自报路径或摘要作为版本。该核验是协作派发的前置能力，不单独启用委托入口。
+
+当前基础合同由 `agent/orchestration/contracts.rs`、`scope.rs`、`evidence.rs` 与 `store.rs` 实现：严格委托/结果字段、冻结引用与版本复核、去重、四子上限/单子在途、租约撤销、截止时间、代次及未知恢复。2026-10-15 已将 Workflow/Execution、Scope/证据和内部 Thread 注册表接入生产数据库初始化；普通发送、历史、原生 Session 操作、移动、归档和删除入口显式检查内部所有权，根 Workflow 活跃时保持根会话锁。普通提交与子 Run claim 共用全应用两个名额；子 Run、内部 Thread 和 Execution 绑定在同一 IMMEDIATE 事务内完成；收到原生首个 turn_start 事件后才登记启动确认，写入派发意图或发送 prompt 均不能冒充原生回执，派发未知继续占名额。
+
+首条原生桥为 `native_child.rs` → 既有 Pi Transport：仅对 Host 已建立的只读 Workflow 注册 delegate/await/cancel，以原生 tool-call ID 去重；子任务使用独立原生 Session，不复制父历史，不挂 RunMemory，不继承父工作副本或写权限。当前仅 Pi 0.85.1 + Plan 父任务 + 冻结文件读取；子任务工具面仅 read，拒绝受管文档、网页和嵌套委托。本地合成模型驱动真实父子 Pi 进程，已验证委托、读取、等待、汇总及整树取消；不是云端模型或真实 Tauri 协作验收。
+
+`supervisor.rs` 以实际 Run 终态对账；停止先撤销租约再发信号，原生进程未确认退出保留 recovering 和名额。Pi 在每次 Provider 请求前执行次数/截止门禁，缺失预算拒绝请求；子任务最多 8 次，工具循环不能先发第 9 次再报超限。适配器错误路径也执行进程清理并等待退出；无法核实退出时不标记 cancelled。内部运行不召回/同步长期记忆；Pi 根任务仅在 Workflow 整体成功后以 workflowId 同步最终输入/答案，此同步边界仍待真实云端验收。
+
+正式协作能力开关仍关闭；Debug 构建通过 `agent_workflow_preview_available` 暴露仅本轮授权入口，非 Debug 的 Host admission 直接拒绝该请求，前端隐藏授权控件。已接 Workflow 原子创建与有界过程/终态投影，本机合成模型已通过真实 Tauri 完成/取消路径；不能据此声称 S2 全阶段可交付。旧二进制最低数据版本门禁、未知原生进程恢复对账、内部原生 Session 文件 TTL 清理、其它引擎/文档/网页子任务、整体用量聚合及有界 DAG 仍未完成；需要这些门禁和真实宿主验收后才开放。
+
+2026-10-15 Host 工具桥验收补证：真实 Gateway handler/turn runner 本地模型两轮合同与实际 Tauri + DeepSeek 新会话均通过，后者包含拒绝无落盘、允许一次、后续新审批、审批中停止和 Plan 拒绝写入。真实包为此前已授权版本；新 approvalId 请求身份隔离仍只有源码/自动测试证据，尚不能宣称最新源码全部已宿主验收。
+
+工作流的有效截止时间取整轮预算与持久范围租约截止时间的较小值。到期巡检须在同一事务撤销范围、取消排队节点并将已派发节点置于停止待确认；到期本身不证明原生进程已退出。正常收尾必须读取根 Run 的权威终态，且所有子节点均已终止；子节点失败或部分完成时不能聚合为全部成功。终态结果引用只由 Host 提供，旧回执不可覆盖终态，收尾同时撤销范围。上述存储接口仍需生产调度器接入后才产生用户可用协作。
+
+AR-S2 新增受控工具 `delegate_task`，仅注册到通过安全验证的父执行器。示例为目标协议，不代表当前 MCP 已提供：
+
+```json
+{
+  "profileId": "researcher",
+  "objective": "核对已附加资料中三个关键结论的来源",
+  "contextRefIds": ["ref-a", "ref-b"],
+  "requiredCapabilities": ["web.read", "document.read"],
+  "outputSchemaId": "evidence-review.v1"
+}
+```
+
+Host 从工具通道的真实 `runId + toolCallId` 解析父身份；不接受模型提交 parent/root ID、任意 threadId、密钥、裸文件路径或权限提升参数。以 `(parentRunId, toolCallId)` 唯一去重，校验 Profile/schema 白名单、作用域子集、引用可见性、深度与剩余预算，原子创建子执行节点/内部 Thread 后返回 `{executionId, status}`。`await_task` 和 `cancel_task` 只接受同一父执行节点拥有的子 ID；等待返回有界结构化结果或明确 pending/failed，不直接把自然语言结论当成功状态。
+
+```text
+ChildResult {
+  executionId, status: succeeded | partial | failed | cancelled,
+  summary, findings[], evidenceRefs[], artifactRefs[],
+  unresolved[], effects[], usageRefs[]
+}
+```
+
+所有结果长度有界；首版摘要 ≤2000 字符、证据引用 ≤20 个、序列化结果 ≤32 KiB，超限返回截断标记及 Host 成果引用。`effects` 由 Host 工具审计补齐，不能信任模型自报“未修改”；`usageRefs` 来自真实用量来源。结果通过原父工具调用返回主 Session，不拼接子 transcript。无法安全注册这些工具的引擎不作为委托父节点；无法隔离权限/原生记忆的引擎也不作为子节点。
+
+S2 产品接入切片：`readOnlyCollaboration` 是发送意图中的显式布尔授权，默认 false；Host 候选硬过滤仅允许通过版本门禁的 Pi 父节点，保持原 Session 亲和。Prepare 冻结显式文件证据，claim 在同一事务内持久化 Scope、证据、根 Run/消息及 Workflow，任何失败全部回滚。只读工作流快照从根 Run 查询，返回独立控制序号、总体状态与最多四个子节点的有界摘要，不返回内部 Thread、原生 Session 或私有路径；前端在 agentStore 保存按根 Run 隔离的投影，仅可见且活跃的流程查询更新。终态立即停止刷新，重挂载从快照恢复；原生事件仍归各自 Run，不复制子正文流到根消息。投影为首版状态查询，不宣称已实现完整跨节点事件 replay。
+
+结果优先的前端投影：LightResponsePanel 复用 `sn-chat-*` 阅读列、消息与输入区视觉，仍使用独立 ResponseTurn 生命周期；WorkflowProgress 保持锁与轮询逻辑常驻，只有子任务内容按需展开。ProjectChatPanel 不挂载 RunRoutingDetails，WorkflowProgress 不接受路由详情插槽，展示与引擎类型无关；Host 路由快照/审计契约保留供工程诊断。子任务标签使用 executionId 作为内部稳定 key，显示 objective、状态、摘要和未解决项；前端仅按真实快照计算已完成数量，失败/取消不能计入成功；不改调度器或新增模型调用。WorkflowProgress 的收起条件同时要求整体 succeeded、未锁定、全部子项 succeeded 且 unresolved 为空；展开状态按 Run 隔离，已选择子结果阻止完成时自动收起。详情关闭恢复触发按钮焦点，不创建新事件或改变快照锁。ProcessRail 接收结果动作插槽，保持过程明细与异常提示为整行，不增加计时器。运行态依据实际 ToolCard 展示最近三项归并进展，按最近事件排序并优先保留进行中项；用户可展开全部，终态自动收起。状态明确区分已完成、进行中、失败和终态下未确认的工具，不推断百分比或未来步骤。当前动作的无障碍播报与秒级计时分离，避免重复播报。过程区置于滚动区内，不挤占 Composer；异常/恢复提示放在折叠内容外，隐藏详情不解锁或停止监听。 轻量对话使用现有 near-bottom 判断，按本地阅读状态决定是否跟随最新正文；ResizeObserver 仅观察内容尺寸，不新增定时轮询，卸载即清理。提交接纳后恢复跟随；切换会话由组件 key 隔离。终态正文复用 AnswerCopyButton 与既有 Markdown 剪贴板服务，保留源码格式并区分成功/失败；更多操作只改变呈现，不改变 handoff 的范围与执行门禁。
+
+任务目录的单条/列表读取按最新 Run 对应 Workflow 投影状态：整体成功才显示完成，取消显示已取消，partial/failed 显示失败，未核实仍显示进行中；不改写原生 Run 历史。前端已知快照同步当前轮目录状态，旧轮快照不能覆盖新轮。协作停止/失败在进度区明确提示成果缺口。
+
+#### 23.13.6 Workflow、Thread 与 SQLite 模型
+
+AR-S1 保留单 Run 执行链，在其前引入 §23.13.13 的 Submission 控制准备与去重；旧入口适配同一提交服务，不提前实现调度图。AR-S2 起引入 Workflow 表示一次用户发送，Execution 表示逻辑工作，既有 Run 表示一次原生尝试；重试不复用旧 Run ID。UI `tasks` 表仍是工具域任务，不能拿来保存 Agent 调度状态。
+
+| 目标增量 | 必需字段/约束 | 所有权 |
+|---|---|---|
+| `agent_submissions`（S1） | 全局唯一 client_request_id、intent_hash、可空 thread_id/run_id、state/generation、配置/授权代次；详见 §23.13.13 | Run 前的提交、取消、去重与恢复；准备成功前不建 Run |
+| `agent_route_decisions` | route_id、request_id、thread_id、execution_id 可空、候选摘要/hash、选择原因、模型/策略/Adapter 版本、耗时与用量引用 | 路由审计，不另存完整 Prompt 或密钥 |
+| `agent_workflows` | id、root_thread_id、user_message_id、client_request_id、state、generation、budget_json、policy_version、final_result_ref | 每根 Thread 最多一个非终态 Workflow；`(root_thread_id, client_request_id)` 唯一 |
+| `agent_executions` | id、workflow_id、parent_execution_id、thread_id、role/profile_version、scope_snapshot_id、state、required、output_ref、delegation_key | 父子必须同 Workflow；depth ≤1；逻辑节点结果与归属，不复制 Run 事件 |
+| `agent_execution_edges`（S3） | workflow_id、from_execution_id、to_execution_id、dependency_kind | 两端同 Workflow，无自环/循环；节点创建与边插入同事务 |
+| `agent_threads` 增量 | visibility=`user`/`internal`、root_thread_id、owner_execution_id 可空 | 旧行为默认 user；内部 Thread 不进普通列表，不能由普通发送/移动接口直接操作 |
+| `agent_runs` 增量 | client_request_id、workflow_id、execution_id、attempt、route_id、dispatch_state、runtime_generation、scope_snapshot_id、budget_reservation_id | 旧 Run 新列可空；S1 根请求以 `(thread_id, client_request_id)` 唯一去重；S2 内部尝试用各自 Host ID。同 Thread 仍最多一个非终态 Run，同节点最多一个在途 attempt |
+| `agent_workflow_events` | workflow_id、seq、event_id、execution_id、kind、source_run_event_id 可空、control_payload | 只存编排事件与原生事件引用，不复制正文 delta；唯一 source 引用去重 |
+
+ScopeSnapshot 沿用 §7.5 / NEXT-031/035 的设计，实施时补不可变持久引用及 authorization generation；路由快照不能代替授权。一个内部 Thread 首次绑定一个引擎与原生 Session，不共享根 `external_session_id`。内部 Thread 只服务所属执行节点的尝试；父计划与最终汇总可按顺序使用根 Thread 的同一原生 Session，但对应不同 Execution/Run。
+
+首次用户发送只写一条用户消息。规划、委托与合成提示标为内部来源；UI 不将每个原生 Run 的回答都渲染成用户可见最终答案，最终用户回答仅由 Workflow 的指定输出节点发布。原生审计完整保留。规划 Run 的终态不解除根会话发送锁；门禁同时检查非终态 Submission、Run 和 Workflow；同一 Submission 的内部状态推进不视为新发送。同根重复发送按 client_request_id 幂等返回，不同请求在锁内拒绝；不要通过扩大每 Thread 并发绕开约束。
+
+实施补充：内部 Thread 的归属以 `agent_internal_threads(thread_id, root_thread_id, execution_id)` 不可变注册表持久化，避免在普通 Thread DTO 中暴露编排身份。内部记录同时保持 archived 标记，兼容旧版普通列表过滤；新版普通历史、原生 Session 操作与发送入口仍须显式拒绝内部身份，不能仅靠界面隐藏。数据库触发器保护所有权、活跃 Workflow 的根移动/归档/删除及内部 Run 绑定；根删除在同一事务清理自有内部记录。旧二进制没有协作隔离合同，启用协作前仍必须关闭旧实例，不能把兼容隐藏声称为旧客户端完整授权保护。
+
+内部会话必须随根归档/删除策略管理：先确认所有后代已停止与租约撤销，再归档、按 TTL 清理自有原生引用；不能删用户在外部客户端创建的 Session。根会话移动项目、删除归属或缩小范围时，有在途 Workflow 必须先停止并核实；不能只检查根 latest Run 是否结束。
+
+#### 23.13.7 有界 MultiAgent 调度
+
+AR-S2 仅父 → 子 → 父单层委托。AR-S3 支持固定拓扑 `plan → [research_a, research_b] → synthesize → proposal`；proposal 可为不调用模型的 Host 验证节点。计划来自版本化模板或模型结构化提案，但必须由 Host 校验节点数、边、能力、预算、必需/可选依赖及输出 schema 后才执行。首版不开放可视化 DAG 编辑器、不动态递归扩图。
+
+Host 以拓扑就绪队列执行：必需依赖成功才入队；必需依赖失败使下游 blocked，整轮返回失败及已完成成果；可选依赖失败可继续，但聚合明确缺口。工作流状态为 `queued / running / waiting_input / cancelling / recovering / succeeded / partial / failed / cancelled / interrupted`，终态通过 CAS 唯一落库。`dispatch_unknown` 节点使整轮 recovering，直到核实或明确人工处置，不当作已完成节点。
+
+原生全应用并发初值 2，根与子均占令牌；S2 活跃父 + 单子可运行，若只剩 1 个总容量则不接受同步子委托并让父继续单 Agent。S3 的规划 Run 先完成、释放令牌，才运行最多 2 个只读节点，收齐后续用根 Session 汇总。等待工具结果但仍活跃的原生循环不释放令牌；只有 Adapter 能证明已暂停并禁止后续模型/工具执行时才可另议。调度器公平排队，不能预占全部名额再等待自己的后代。
+
+首期子节点仅 `document.read / file.read / web.read` 等已验证只读工具，不使用 shell 伪装只读。只读工具范围以父 Scope 中可读路径的子集冻结；执行时再次 canonicalize，链接逃逸或资料路径变化不能扩大到父工作区。即使原生 SDK 仍提出 write/edit/bash 请求，Rust 也拒绝且不弹出可批准卡片；子节点联网须单独包含 web.read。读阶段不派发同目标的 Agent 写；最终单写者持有全应用 target lease（文档 ID 或 canonical workspace root），不同根任务也参与互斥。原生进程或工具无法遵守写 lease 的执行模式排除出协作候选。用户手工编辑和外部程序不受此锁控制，仍依靠 content hash/baseVersion、TextAnchor 和 CAS 检测冲突。代码写与命令能力按既有门禁开放，不因 DAG 自动获准。
+
+#### 23.13.8 上下文、审批与记忆
+
+`TaskContextPackage` 只保存/传递目标、用户约束、Host 校验的 context refs、证据版本、已完成发现、未解决项与真实副作用引用；正文按授权按需读取。子节点返回的 URL、文档 ID、路径与引用均重新验证，不能把子结果或网页中的指令升级为 Host 策略。根 Session 保存自己看到的简要子结果，不导入子 Session 全历史。
+
+单 Run 的 Host 工具桥先落实逐请求审批：前端必须回传卡片的 `approvalId`，控制通道按 Run 隔离，工具桥只消费与当前不可变请求匹配的 ID 和 once/deny；迟到、重复和其它请求的决定不能授权后续操作。等待期限使用固定截止时间，错误 ID 不延长等待；取消仍在执行前复核。卡片状态随请求身份重建，前一卡片的迟到回包不能把下一张卡片标成已提交。这不等于已实现 Workflow 的 Scope generation 合同。
+
+审批主键逻辑绑定 `(workflowId, executionId, runId, toolCallId, actionHash, scopeGeneration)`。父任务批准过某次操作，不等于批准子节点或重试；更换参数、目标、代次即旧审批失效。既有会话级授权只有在策略明确包含该子执行模式、目标和动作时才可复用，首期一律子任务只读。Plan/Ask/Accept edits 由 Rust 策略执行，Profile 和模型提示均不能取消它。取消时原子撤销派发与工具租约，审批回包晚到也不能重新启动节点。
+
+长期记忆遵循 §23.12，并增加 Workflow 级边界：路由判断不读写记忆；多节点首期所有内部运行关闭自动 recall/sync，根任务只在开始时按原有授权召回一次并作为不可信参考，按需要给子任务最小引用。只有整体成功后同步“原始用户输入 + 唯一最终答案”，以 workflowId 去重。当前 Pi 协作路径已由 Workflow 整体成功门禁接管同步；Claude/OpenCode 的协作钩子仍须适配，Hermes 原生插件若不能按 Session 抑制中间同步，不加入多节点候选。不能全局关闭插件而影响并行的普通会话。
+
+OpenViking 不做 DAG 黑板、跨 Agent 消息总线或本地恢复状态存储。记忆连接异常不阻塞主任务，但外发授权撤回须阻止后续同步。云端身份共享不等于项目级可见性；Host 引用授权仍是最后边界。
+
+#### 23.13.9 事件投影、取消与恢复
+
+原生事件继续 RunStore-first。AR-S2 才升级双端事件合同：保留现有 runId/seq，新增可空 workflowId/executionId/parentExecutionId 与 actor；旧事件仍可读取，新子事件不得按根 Run 的 seq 直接归并。`workflow_seq` 是编排投影独立游标，不冒充原生顺序；跨子节点只保证 Host 持久化顺序，不推断真实并发因果。
+
+原生 Run 事件落库与其 Workflow 引用在同一 SQLite 事务完成，再发 Channel；控制事件如 execution_queued、dependency_blocked、workflow_completed 自身入编排表。replay/snapshot 通过 source_run_event_id 取正文，避免第二份消息真相源。前端只在 `agentStore` 增加 Workflow/Execution 索引，四个既有 store 仍分离；`changeSessionStore` 继续拥有文档审批状态。
+
+整体停止先写 cancelling、增加 generation、封住新派发并撤销租约，再取消各原生句柄与队列。对子进程按所有权优雅终止、超时强杀并验证退出；共享 Hermes 服务只能中断所属 Session，不能杀整个 Gateway 影响其他会话。默认停止宽限 5 秒，未核实停止则保留 recovering/等待核实，不释放可能仍在写的目标锁。子任务停止只影响该节点及必需依赖，整体状态由依赖策略计算。迟到 delta 保留审计但不改写已发布最终答案；不得让旧终态解锁新 Workflow。
+
+重启先恢复锁与未知派发，再调用各 Adapter.reconcile；按原生 Session/工具审计确认运行、停止或已提交结果。没有原生活跃轮次恢复能力时只允许标 interrupted，不自动重放。仍有任何未核实外部副作用时维持恢复门禁；确认只读且已停止的失败节点可由用户显式重试，生成新 attempt，并重新校验范围、预算和输入版本。已完成写入不因重试再做一次。
+
+#### 23.13.10 预算、质量与可观测性
+
+BudgetCoordinator 管整轮时限、节点数、深度、原生迭代和并发，数值以 PRD 为真相源；先预留子预算再启动，终态归还未用份额。整轮 deadline 为父子共同上界；单子 deadline 取父剩余与角色上限较小值，等待审批也受整轮时限约束，到期撤销待处理操作并返回可恢复状态。预算耗尽停止新增任务并尝试有界汇总，不伪造全部完成。
+
+路由调用是 Host ModelGateway 新产生的真实用量，使用独立 source=`host_router` 和 request ID；引擎消耗仍来自四个原生账本。Host 只保存预算预留、用量引用和聚合投影，不复制整份引擎 Token 明细，不把 parent inclusive usage 再加一次 child usage。适配器须注明用量是 leaf 还是包含子任务的总量；无法拆分时按权威总量展示并标无法细分。价格未知、延迟到账、原生重试未上报都标 unknown；无请求前可执行的成本上界时不承诺硬费用封顶。
+
+RouteTrace 记录输入指纹、策略/Profile/Adapter/引擎版本、候选排除原因、最终选择、是否规则降级、耗时；执行 Trace 关联 Workflow/Execution/Run/工具审批/成果版本。普通日志不存 Prompt 正文、附件正文或凭据，不外发诊断遥测。指标分清 routing latency、prepare/冷启动、首 token、总完成时间、取消确认时间、任务成功率、审批拒绝率和真实成本；模型自评/路由 confidence 不能作为成功真相。
+
+初始优化采用离线黄金集与仅路由影子判断；对同等合法候选比较任务质量/成本/延迟，先记录可解释规则，再调整权重。每次策略升级固化 policyVersion，保留回退；不在有写入副作用的真实任务上双跑评测，也不首期引入在线探索或自动训练路由器。
+
+#### 23.13.11 实施映射、迁移与验收
+
+| 阶段 | 代码落点（目标） | 必须保持/新增的契约 |
+|---|---|---|
+| AR-S0 | `agent/routing.rs`、`agent/registry.rs`、Adapter 门面；复用 `capabilities.rs`、`commands.rs` 与现有四引擎 transport | 明确硬过滤与会话亲和；手选输出、历史、审批、取消不回归 |
+| AR-S1 | `agent_run_start` 路由接点、现有 `model/*` 结构化调用、`tauri.ts`、Composer 与能力详情 | 自动/显式请求的双端合同；LLM 结果验证、派发边界、版本快照与取消竞态 |
+| AR-S2 | `agent/orchestration/*`、RunStore/schema、工具桥、`agentStore` 与过程轨；复用现有 Scope/权限模块 | Workflow/内部 Thread、委托身份、深度/预算、子事件、根锁、停止恢复和记忆抑制 |
+| AR-S3 | 同一 orchestration 模块增加 DAG 与 target lease | 有限拓扑、规划/执行/汇总分阶段、两只读并发、单写者、全局资源降级 |
+
+新增表/列沿用 `create_schema/ensure_columns` 幂等迁移，旧数据不重写原生 Session，不回填虚构 Workflow。受支持的新版本以可空字段读旧数据；内部 Thread 的查询/搜索/归档过滤、所有命令的 owner 校验与根锁必须同批上线，再开启 S2。功能开关建议为 `agent.routing.enabled`、`agent.delegation.enabled`、`agent.multi_agent.enabled`，初始关闭，依赖顺序为 routing → delegation → multi_agent。关闭开关停止接受新协作任务，保留既有恢复/审批/取消路径直到任务终止。
+
+运行于旧二进制不能靠“加列兼容”推断安全：旧版可能把 internal Thread 当普通会话。启用 S2 前须具备数据格式最低读写版本门禁；降级只能使用受支持版本或预先备份的完整数据根，不允许旧版直接打开新增内部会话的库。单引擎回退开关与二进制/数据回滚是两种不同操作。
+
+实施验证映射：① Rust 路由纯函数/注册表/恶意候选与 schema；② SQLite claim、幂等、DAG、根锁与派发未知窗口故障注入；③ 四种真实二进制的原生 Session/流式/工具/取消契约（HTTP 夹具不能代替真实供应商验收）；④ 双端事件与内部 Thread 不泄露、父子审批归属；⑤ 文档冲突与取消副作用；⑥ 真实 Tauri 黄金任务及 50 KB 编辑并行性能。PRD §15.8 是交付标准；现有 `sophonote-current-architecture.*` 继续表示已实现架构，不能在代码落地前把本节目标节点画成当前能力。
+
+#### 23.13.12 设计缺口收敛与实现顺序（目标合同）
+
+当前实现已具有注册表、预筛选、观察缓存、影子推荐及共享模型/凭据准备，缺少自动执行需要的提交控制与完整派发准备。按以下顺序实施；影子模块只提供实验数据，不逐步叠加成另一套派发器。
+
+| 缺口 | 确定设计 | 首个落点 / 退出条件 |
+|---|---|---|
+| auto 与 EngineId 混用 | `RoutingIntent = explicit(engine) / auto`；EngineId 永远只有四个；缺省旧请求保持原语义 | 新 DTO 与旧参数适配同一入口，禁用 auto 必须结构化拒绝 |
+| Run 前无取消/去重身份 | S1 新增 Submission，S2 才新增 Workflow；先持久化提交身份再异步准备 | start/status/cancel/replay 双端契约、重挂载与重复发送测试 |
+| 建议尚非可派发结果 | 分离 MetadataScreen、Probe、Prepare、Commit；用不可序列化的单次 PreparedExecution 消费派发许可 | 模型/凭据先统一，再抽公共作用域与资源租约 |
+| 默认模型及 Hermes 别名漂移 | 冻结 Host provider 实例/model/配置代次，Adapter 只做明确的协议映射 | 模糊映射拒绝，配置变化后不混用旧 key 与新 URL |
+| claim 与 prepare 顺序不一致 | 提交锁先于准备；Run claim 在准备完成后、原生输入提交前 | 原子 claim + dispatch intent + 单次消费；未知状态锁住重试 |
+| 跨根资源与父等待 | NativeRunLease 全 App 共用；探测 Semaphore 另算，不占执行名额 | 手动和自动、父与子都纳入同一账本，不靠每 Thread 限流代替 |
+| 协作输出未形成闭合合同 | 版本化角色/结果、去重委托、权限交集、引用重验、显式重试 | 首期只有单层只读，父资格与子资格分别验证 |
+| 发布与故障判定笼统 | 80 例黄金集 + 故障窗口矩阵 + 独立开关回滚 | 代码覆盖、真实 Runtime、供应商、Tauri 分别记证据 |
+
+2026-10-14 入口收敛：Composer 不再暴露执行引擎选择；新提交以自动意图进入 Host，已有 Session 保持亲和。手动协议仅作旧客户端/内部契约兼容。S1 使用可审计确定性选择，不为“智能路由”额外发送用户正文给分类模型；选中后只准备及派发一次。前端按提交快照等待 Run claim，再沿用持久 Run 事件恢复；未知提交不能创建新 ID 重发。
+
+#### 23.13.13 提交身份、前置取消与双端协议
+
+目标新入口为 `agent_submission_start({clientRequestId, threadId?, routing, modelSelection, contextRefs, message, permissionMode}, channel)`，立即返回 `{submissionId, state}`。`agent_submission_get` 返回已持久化的阶段、可空 threadId/runId、实际引擎、错误码及恢复动作；`agent_submission_cancel(submissionId)` 可在无 Run 时停止准备；replay 使用独立 submission seq。旧 `agent_run_start` 保留原返回值，在迁移阶段通过相同提交服务等待 Run claim；所有入口共用 Thread 排他约束，不能绕过新锁直接派发。该完整自动路由 DTO 仍为目标；当前已注册下文的手动提交 start/get/cancel 变体，复用旧请求 DTO。 首个持久化切片已提供 `agent/submission.rs` 的 SubmissionStore 与幂等建表，覆盖登记/重放、状态 CAS、准备取消、Run 同事务绑定及离线恢复/墓碑操作；旧发送入口已登记内部提交，首次接管数据库前持有 OS 文件锁并恢复旧准备状态。 早期手动切片只接受四引擎显式选择，当前 auto 与配置 epoch 已扩展，持久 scopeGeneration 尚未接通；实际状态表以 generation 防迟到回包，prepared 状态到绑定有效期 30 秒（当前手动链路另限制从登记到 claim 不超过 120 秒）。绑定函数要求调用者事务中已存在同会话、同引擎且 queued 的 Run，拒绝并发活跃 Run；它只持久化 dispatch intent，不构成原生启动许可。手动与自动入口共用提交锁与宿主独占锁，自动路径还复核配置代次。 已接入的 `submission/live.rs` 让旧 agent_run_start 为每次调用生成内部 UUIDv7 并在探测/准备前登记提交；旧返回值不变，不宣称跨调用幂等。RouteDecision 携带仅 Host 内存可见的准备凭据，Run claim 同事务核验 generation 并绑定提交；原生后台启动前持久化 queued，用户消息纳入 claim。按数据库路径持有 OS 文件独占锁至 Host 退出，获得锁后才恢复准备中断；Run 终态驱动已绑定提交收口，未知/Interrupted 保持 recovering。RunStore 及原生 claim 都校验提交所有权；准备失败标 failed，未 claim 的异步任务释放标 interrupted。数据库触发器使 Run 完成/失败/取消与提交终态同步，Run interrupted 只转 recovering；此切片的 dispatching 仅代表持久派发意图，尚无统一原生 ack。触发器同时阻止活跃提交所属 Thread 的删除/移动/归档；删除整个会话及其子记录改为同一事务，避免删除被拒绝时先丢失消息。此前端准备取消与自动入口现已编码，当前实现范围以本节开头 AR-S1 说明为准；完整协作租约与派发对账仍待后续阶段。
+
+新增 `agent_submissions`：`id/client_request_id UNIQUE, intent_hash, routing_mode, requested_engine?, thread_id?, state, generation, config_revision, scope_generation, selected_engine?, run_id?, error_code?, created_at, updated_at`；已有 Thread 的非终态提交部分唯一索引防并发；新会话用全局唯一 clientRequestId 去重，不能只靠 `(NULL threadId, requestId)`。输入正文仍由草稿/既有消息真相源持有，审计只保存引用与加盐意图摘要，不再复制正文。准备期间上下文附件由 Host 暂存引用并绑定提交；重启不凭一份不完整摘要重建用户任务。
+
+clientRequestId 使用 UUIDv7；首次未知 ID 只接受 24 小时内、未来偏差不超过 5 分钟的时间戳。已知 ID + 同 intent 返回原状态，已知 ID + 不同 intent 返回 REQUEST_ID_CONFLICT；终态重送不会再执行。失败准备详情默认保留 7 天，其后可清理明细；完成提交明细跟随所属 Run/Thread 生命周期；即使删除根会话，最小请求墓碑仍至少保留 7 天，重送返回 REQUEST_GONE，不重建已删除会话。旧 ID 即使已清理也因时间窗拒绝，不被重新当作新任务。修正输入或显式重试必须创建新 ID；时钟异常保留草稿并提示校准。此幂等规则只约束 Host，不声称原生副作用 exactly-once。
+
+Submission 状态：`accepted → preparing → waiting_credentials? → prepared → dispatching → running → terminal`，终态为 `succeeded/failed/cancelled/interrupted`，可从未派发阶段转 `cancelled/failed/interrupted`；`dispatching` 中断转 `recovering`。Run 尚未创建时，取消先以事务推进 generation 与终态，再释放准备资源；尚在 Keychain/阻塞校验内的结果带旧 generation，回到 Host 时丢弃。等待系统授权的默认准备 deadline 为 120 秒，且不延长从 accepted 开始计算的整轮 10 分钟预算。凭据读取在受限阻塞任务中执行，同一 provider 的在途读取合并等待，分别核对各提交取消代次；绝不在持有 SQLite 写事务时等待系统或网络；不可中断调用的收尾时间不伪装成已取消进程。
+
+前端在 agentStore 内维护 Submission 映射与乐观消息，不新建第五个业务 store；`accepted/preparing` 阶段锁住同一草稿发送，显示停止。claim 事件把同一乐观消息绑定到正式 user_message_id；失败保留原草稿，重连通过 submissionId 查询，不能仅因 Channel 丢失再调 start。关闭窗口不等于取消，显式停止才取消；应用退出先收口控制状态，重启依数据库恢复门禁。
+
+当前已实现**手动提交**协议：`agent_submission_start({clientRequestId, request: AgentRunStartArgs}, onEvent)` 要求明确四引擎之一，返回状态快照并在后台准备；重复 ID 返回原快照，不重新订阅或派发。`agent_submission_get(submissionId)` 查询阶段、generation、threadId/runId 和取消意图；事件沿用已有 Run seq/replay，尚无独立 Submission 事件流。`agent_submission_cancel(submissionId)` 在 claim 前原子取消并推进 generation；claim 后只持久化 cancel_requested 并通知原生令牌，结果未知不标 cancelled。两个原生启动入口必须先注册令牌再读取持久取消位，消除 claim 与令牌登记之间的漏取消窗口；读取取消位失败则取消启动。手动接口仅作兼容，不授予协作或新模型/权限能力；自动产品入口使用本节开头列出的 S1 约束。`src/services/agentSubmission.ts` 提供 UUIDv7 生成、深复制冻结的请求封套和 start/get/cancel 类型化客户端及契约测试，Composer 已改用 `agent_submission_auto_start`；`agent_submission_find(clientRequestId)` 专门恢复丢失的首次回包。自动入口不接受 engine 字段；宿主交互验收仍待完成。
+
+#### 23.13.14 统一准备合同与模型身份
+
+准备分为两层：①只读候选预检可以并发、无凭据/Session/模型调用；②按稳定规则选择一个候选后串行 prepare，读取一次所选凭据、解析实际作用域、保留资源和原生运行时槽。S1 prepare 失败不自动尝试其它引擎，避免多次系统授权和未确认 Session 残留；§23.13.4 的一次安全改选留作独立后续门禁。
+
+`ModelSelectionSnapshot` 固定 `{hostProviderId, modelId, configuredProtocol, endpointIdentity, configRevision}`，供本轮所有候选比较；Adapter 生成 `NativeModelBinding`，必须保留同一供应商实例与模型 ID。Claude 只允许现有 Anthropic 映射及已验证的官方 DeepSeek 同源协议转换，不改写代理域名；Pi/OpenCode 只接受当前已接入协议。Hermes 的 `model.options` 只读目录需要与该确切 Host 实例、endpoint、模型白名单、原生 authenticated 状态一致；仅凭 kimi/moonshot 等 slug 别名或“同名模型”不能证明同一外发目的地。无法证明一对一映射时，Hermes 从自动候选排除，手动旧路径保持既有兼容行为；不能从 Runtime 默认模型反推用户意图。
+
+模型预筛选和所选 Adapter prepare 必须调用同一个协议/模型校验函数。`requires_key=false` 跳过凭据读取，Host 准备结果保持空 key；原生协议若要求字段，沿用固定的 local-no-key 占位符而不发送历史真实密钥；不因为 Host 留有历史 key 就发送它。`requires_key=true` 才调用既有凭据服务，空值为 CREDENTIAL_MISSING，读取失败为 CREDENTIAL_UNAVAILABLE，不能降级为免密钥、切供应商或把缓存值当作授权永不过期。候选探测、影子评估和失败诊断不读取密钥。已实现的 `agent/model_preparation.rs` 由 Pi/Claude/OpenCode 的公共准备入口使用，候选预筛选复用同一 `select`；6 项单元测试覆盖免密钥不读取、实例/模型保留、缺失/不可用区分、白名单及协议映射。该模块仅为模型准备部分，不等同于完整 PreparedExecution；Hermes 身份映射和完整代次冻结仍需后续接入。
+
+配置与凭据修改分别推进 configRevision/credentialGeneration；撤权推进 scopeGeneration。三者由 Host 管理，前端传值仅作期望值，不能自授权。PreparedExecution 为 Rust 内部不可 Clone、不可 Serialize 的单次值，包含实际 Runtime 句柄/槽引用、原生模型绑定、短期凭据、ScopeSnapshot 引用、NativeRunLease、取消 generation 与提交 ID。审计只保存代次、枚举和原因，不保存 endpoint、key、正文或工作路径。准备结果默认有效 30 秒；commit 前核对各代次、期限和取消状态，任何变化丢弃准备并返回 PREPARATION_STALE，不把新 URL 与旧 key 混在一起。
+
+ScopeSnapshot 固定项目身份、可见文档 ID+version、canonical 根目录、显式附件引用、允许工具/网络目的范围和授权代次。路径 canonicalize 不是永久授权，文件工具每次再次校验实际路径、链接逃逸及当前授权。Profile 的 requiredCapabilities 必须是有效权限的子集；准备完成也不跳过逐工具审批、DocumentService Patch 与 CAS。受管笔记只能通过工作副本/提案写回。
+
+NativeRunLease 初始全 App 容量 2，S1 无空闲则 RESOURCE_BUSY、保留输入，不建立隐形长队；S3 有界队列默认最多 8 个待执行节点并服从整轮 deadline。租约与 Runtime 槽在准备期间保留，commit 失败/准备取消释放；派发未知继续占位直到 reconcile。不得持有数据库事务等待租约。跨重启依据未终态 Run 重建容量，核实前 fail closed；启用自动执行前必须确认或补齐数据根独占 Host 锁，不能仅依赖开发启动脚本防止双实例；不另建分布式调度服务。
+
+#### 23.13.15 准备、claim 与派发事务顺序
+
+统一顺序为：先锁定 Submission/Thread 意图，事务外完成 prepare；随后单事务校验提交 generation、Thread 绑定/并发、各版本代次和预算，创建唯一 Run/用户消息、关联路由决定、绑定所选引擎并记 dispatch intent。事务失败释放 PreparedExecution，不执行任何原生输入提交。各 Adapter 的 prepare 必须声明是否创建了空原生 Session；已创建则记录所有权及清理结果，不把它当作模型已派发。
+
+提交外部请求前先持久化 `dispatching`，然后消费 PreparedExecution 调用一次 start。收到原生身份/确认后记 `acknowledged/running`；从开始尝试提交起，异常或取消若无法证明未接受，一律 `dispatch_unknown/recovering`。不使用 token 到达与否做判据。Run claim 后 UI 只依据实际 selectedEngine 更新会话，不依赖原草稿选择。现有 RunStore 的原子审计是基础，不等于这些派发状态已全部实现。
+
+| 故障窗口 | 持久状态与恢复动作 | 禁止行为 |
+|---|---|---|
+| prepare 前或中途取消/Host 退出 | Submission cancelled 或 interrupted，无 Run；丢弃迟到准备，清理自有暂存 | 不补发模型，不留永久 Thread 发送锁 |
+| prepared 后、claim 前崩溃 | 准备句柄失效，启动后释放/核实本地暂存并标 interrupted | 不反序列化密钥或复用旧权限代次 |
+| claim 后、原生调用前后无法区分 | dispatch intent → recovering，按关联身份核实；无证明则等待核实 | 不自动新建另一个引擎 Session 重放 |
+| 原生 ack 到达、Host 落库前崩溃 | 查询属于本提交的原生身份；不能查询到则保持 unknown | 不因数据库无 ack 推断未执行 |
+| Run 终态已存、Channel/窗口断开 | replay 返回同一结果与用户消息 ID | 不追加第二条用户消息/最终答案 |
+
+统一内部错误码至少包括 ROUTING_DISABLED、NO_ELIGIBLE_ENGINE、MODEL_PROTOCOL_UNSUPPORTED、MODEL_NOT_CONFIGURED、MODEL_MAPPING_AMBIGUOUS、CREDENTIAL_MISSING、CREDENTIAL_UNAVAILABLE、SCOPE_CHANGED、RESOURCE_BUSY、PREPARATION_STALE、PREPARATION_TIMEOUT、REQUEST_ID_CONFLICT、REQUEST_EXPIRED、REQUEST_GONE、DISPATCH_UNKNOWN。错误投影给出中文 message + action（settings/runtime/reselect/retry/reconcile）；原生异常正文只作本地脱敏诊断，不拼进模型上下文或向 WebView 返回密钥。
+
+#### 23.13.16 协作的剩余闭合合同
+
+S2 的父资格、子资格分开注册：父须具备可鉴权的 delegate/await/cancel 工具桥及等待取消；子须具备只读工具交集、独立原生 Session、记忆抑制、轮次上限、可核实取消和可归属用量。任何一项 unknown 均为不支持协作。四引擎初始全部 false，只有带具体版本的真实合同测试通过才逐项开启；上游原生 SubAgent 仍单独关闭。
+
+researcher/reviewer 的 requiredCapabilities 从 Host 版本化角色目录取得；模型只能增加需求不能删除角色最低需求。委托 objective ≤2000 字符、contextRefIds ≤20、请求 JSON ≤16 KiB；重复 `(parentRunId, toolCallId)` + 相同参数返回原节点，不同参数报冲突。await 默认长轮询最多 20 秒、可取消，到期返回 pending，不消耗新的子节点预算；父剩余时间不足时立即返回未完成。父仍运行时占用执行名额，容量只有 1 时不创建一个永远等待自己的子任务。
+
+ChildResult 使用 §23.13.5 的大小限制与版本化 schema；外部事实须含来源引用、文档版本/获取时间及不确定项，Host 重新校验引用可见性和可读取性。结构错误返回 invalid_result，不把自然语言“成功”当成功。结果到达后以 Execution attempt + generation CAS 接收，重复/旧结果不覆盖新尝试。只读失败的显式重试保留逻辑节点并增加 attempt；变更目标、角色、输入版本或授权范围则创建关联的新节点并使依赖重新验证，不偷偷更新已成功节点的含义。
+
+root cancel 优先于子成功与审批回包；所有后代工具租约撤销后，迟到成果可保留审计但不能再触发汇总或记忆同步。必需依赖失败使下游 blocked；可选依赖失败时汇总须读取 failure 标记并列缺口。Workflow 的单一 final_result_ref 用终态 CAS 发布，任何子 Run completed 都不能单独解锁根 Thread。根归档/移动项目先核实全树停止，清理仅限 Host-owned Session 与暂存，不能删除外部个人 CLI 历史。
+
+#### 23.13.17 发布控制与交付检查点
+
+发布策略由 Host 版本化 capability flags 决定：manual 兼容 API 保留，产品不恢复手选入口；shadow 只观测；rules 必须具备完整准备/提交合同；llm_rank 依赖 rules；host_delegation 依赖 Submission、Workflow 与持久权限；workflow_dag 依赖 delegation。任一依赖关闭时拒绝新的高阶段请求，已运行任务继续原版本策略完成或显式取消核实，不热切换执行器。SOPHONOTE_ROUTE_SHADOW 只是当前 Debug 实验开关，不能当作正式产品配置或真实执行许可。
+
+按四个检查点推进：A 统一模型/凭据及作用域准备；B Submission 幂等、前置取消、PreparedExecution、资源与 dispatch intent；C 双端自动入口、规则派发、80 例黄金集及真实四引擎/Tauri 验收；D 单层只读委托后再 DAG。每个检查点更新 NEXT-076 原记录，不另建阶段台账。S1 首版无需 LLM 排序，先证明规则派发正确，再比较有界 LLM 排序的质量/费用收益。
+
+80 例分组以 PRD §7.6.3 为准，机器可读输入/预期/副作用边界在 `src-tauri/tests/fixtures/agent-routing-acceptance.json`，逐例合同运行器为 `scripts/verify-agent-routing.py`。运行器核对编译后的精确测试名，零测试、忽略、超时或失败均不记通过；超时回收本次测试进程组，结果仅写 target 临时构建产物，进展只更新 NEXT-076。Host 合同和原生本地模型夹具分别计数，不外推为真实供应商或 Tauri 验收。另在五个派发故障窗口注入取消、重复事件、配置变更、授权撤回和 Host 崩溃。缓存命中规则 P95≤50ms、LLM 排序≤1500ms、热路由 P95≤2000ms 的计量排除系统授权等待但分别公开准备/冷启动耗时；没有样本与同机夹具结果不声明达标。候选越权、重复派发及内部会话泄露必须为零；默认开启属于发布决定，不能由测试开关自动升级。
+
 ## 24. 架构维护规则
 
 - 产品范围、优先级和验收变化先更新 [PRD](./PRD.md)；组件、协议、存储、专题实现和部署变化更新本文；进展、问题和后续事项只更新[项目台账](./project-ledger.md)。
@@ -2497,5 +2987,6 @@ AppliedPricingSnapshot → UsageLedger → Analytics DTO
 - 旧方案、审计和图表不写回本仓库：历史草稿不在树内，不要重建 `docs/history/`。
 - 现行文档平铺在 `docs/`，不要重建 `docs/current/` 或 `docs/guides/`。
 - 社区入口文档成对维护：英文无后缀（`README.md`），中文为 `.zh-CN.md`。本文与 PRD、台账正文以中文为真相源，不另写英文全译本。
-- 当前架构图统一维护 `sophonote-current-architecture.archify.json` 与校验后的 HTML；本文 Mermaid 保持同一边界的简图，不再维护独立 Hermes 目标图。
+- 当前架构图统一维护 `sophonote-current-architecture.archify.json` 与校验后的 HTML；本文 Mermaid 保持同一边界的简图，不再维护独立 Hermes 目标图。Agent 长期记忆体系只维护 §23.12，不另写专项记忆 PRD。
+- 代码探查先走 graphify 图谱（`query` / `path` / `explain`），改代码后只做 AST-only `graphify update .`，用局部子图代替全库检索以减少 token；`graphify-out` 不是产品运行时，也不进入 WKWebView / Host / 引擎路径。
 - 代码注释只引用 `docs/` 下的长期文档或直接描述不变量，不以历史文件和开发轮次作为实施基线。

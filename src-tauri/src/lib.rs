@@ -5,6 +5,7 @@ pub mod discovery; // NEXT-048 发现五断面数据面（Bridge 写 + 只读 fe
 pub mod export;
 pub mod global_search; // NB-14 全局搜索（轨道 A 只读扩展文件）
 pub mod knowledge;
+pub mod light_response;
 pub mod local_terminal;
 pub mod local_workspace;
 pub mod notebook;
@@ -404,6 +405,12 @@ pub fn run() {
             agent::commands::agent_thread_messages, // AG-13 RunStore：获取 Thread 消息
             agent::commands::agent_run_events_replay, // AG-13 RunStore：seq 重放
             agent::commands::agent_run_delete,      // AG-13 RunStore：级联删除 Run
+            agent::submission::commands::agent_submission_start,
+            agent::submission::commands::agent_submission_auto_start,
+            agent::submission::commands::agent_submission_find,
+            agent::submission::commands::agent_submission_get,
+            agent::submission::commands::agent_submission_cancel,
+            agent::submission::commands::agent_submission_draft,
             agent::commands::agent_run_start, // AG-14 Phase 2：启动 Agent 运行（事件同时写库+Channel）
             agent::commands::agent_thread_history, // AG-17 窗口重挂载恢复：Thread 全量事件史（含 seq=0，跨 Run 升序）
             agent::commands::agent_run_cancel,     // AG-18 运行取消：全局 CancellationToken 注册表
@@ -465,8 +472,16 @@ pub fn run() {
             agent::commands::agent_hermes_mcp_reload,   // Hermes Runtime MCP 动态重载
             agent::commands::agent_hermes_mcp_catalog,  // Hermes Runtime MCP Catalog
             agent::commands::agent_hermes_mcp_catalog_install, // Hermes Runtime MCP Catalog 安装
+            agent::orchestration::projection::agent_workflow_snapshot,
+            agent::orchestration::projection::agent_workflow_preview_available,
             agent::commands::agent_run_snapshot, // AG-20 Run 状态快照（缺口补齐阶梯升级项：replay 填不上时全量重同步）
             agent::commands::agent_run_reconcile, // ISSUE-019：重开非终态会话时向 Hermes reattach，再按权威状态收口
+            light_response::light_response_start,
+            light_response::light_response_list,
+            light_response::light_response_history,
+            light_response::light_response_cancel,
+            light_response::light_response_action,
+            light_response::light_response_handoff,
             completion::completion_suggest,       // AG-30 自然语言补全（轻量路径，不建 Thread/Run）
             completion::completion_cancel,        // AG-30 补全取消传播
             completion::completion_metrics,       // AG-30 聚合指标（§4.5，只记聚合不记内容）
@@ -494,6 +509,14 @@ pub fn run() {
     // 有 PANIC 标记 = 进程内 panic；两者皆无且日志戛然而止 = 进程被异常杀死（崩溃/系统终止），
     // 此时去 Console.app → 崩溃报告 查 sophonote 的 .ips 报告
     app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Ready => {
             tauri::async_runtime::spawn(agent::computer_use::macos::prime());

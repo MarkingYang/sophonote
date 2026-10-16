@@ -1,3 +1,7 @@
+import type { WorkflowSnapshot } from '../services/agentWorkflow';
+import { isResponseConversation, listTextResponses, responseAction } from '../services/lightResponse';
+import { observeSubmission } from '../services/submissionRecovery';
+import { SubmissionRejected, recoverableSubmission, createAutomaticSubmission, startAutomaticSubmission, findSubmission, cancelSubmission, submissionScopeKey, readPendingSubmissions, savePendingSubmissions, type PendingSubmission } from '../services/agentSubmission';
 // ============================================================
 // Track B · 智能体演进（AG-15 · Phase 2 Chat · agentStore slice）
 // 实施基线：docs/architecture.md 事件协议 + §六 RunStore
@@ -59,6 +63,7 @@ export type RunStatus =
 export type AgentEngine = 'hermes' | 'pi' | 'claude_code' | 'opencode';
 
 export interface AgentThread {
+  conversationKind?: 'response';
   engine?: AgentEngine;
   id: string;
   title: string;
@@ -311,7 +316,15 @@ export interface AgentMessage {
 
 /** AG-20：Run 状态快照（Rust RunSnapshot 对齐，agent_run_snapshot 返回）——
  * 真正的 state_snapshot：每一路都取自真相源表，可完整重建 UI 状态 */
+export interface RoutingSummary {
+  engine: AgentEngine;
+  policyVersion: string;
+  taskLabel: string | null;
+  reason: string;
+}
+
 export interface RunSnapshot {
+  routing?: RoutingSummary | null;
   runId: string;
   threadId: string;
   /** Run 状态（来自 agent_runs 表，不经事件推断） */
@@ -387,6 +400,8 @@ function isTerminalRunStatus(status: RunStatus): boolean {
 // ------------------- Store 状态 -------------------
 
 interface AgentState {
+  workflowsByRun: Record<string, WorkflowSnapshot>;
+  setWorkflow: (runId: string, snapshot: WorkflowSnapshot | null) => void;
   /** 活跃 Thread 列表（tab） */
   threads: AgentThread[];
   /** 历史 Thread（已关闭未归档；按项目 merge） */
@@ -446,6 +461,11 @@ interface AgentState {
    * 有值时只随 run_started 事件回传，供 Surface 展示和审计。
    * skill 经 Hermes command.dispatch 激活原生 Skill；SophoNote 不注入正文。
    * focusDocument 是当前 Surface 明示的文档范围，Rust 将其转为原生附件。 */
+  pendingSubmissions: Record<string, PendingSubmission>;
+  submissionMonitors: Record<string, boolean>;
+  setSubmission: (key: string, pending: PendingSubmission | null) => void;
+  recoverSubmission: (key: string) => Promise<{ threadId: string; runId: string; engine?: AgentEngine; terminalStatus?: ThreadStatus } | null>;
+  cancelSubmission: (key: string) => Promise<void>;
   lastStartError: string | null;
   startRun: (
     threadId: string | null,
@@ -462,6 +482,8 @@ interface AgentState {
     workspaceRoot?: string | null,
     workspacePermissionMode?: WorkspacePermissionMode,
     engine?: AgentEngine,
+    automatic?: boolean,
+    readOnlyCollaboration?: boolean,
   ) => Promise<{ threadId: string; runId: string } | null>;
   /** 处理事件（reducer 模式） */
   handleEvent: (event: AgentEvent) => void;
@@ -483,7 +505,7 @@ interface AgentState {
   /** 取消 Run（AG-18）：true = 取消信号已发出；终态可见性由 run_cancelled 事件归约承担 */
   cancelRun: (runId: string) => Promise<boolean>;
   /** 回传 Hermes 原生审批结果。 */
-  respondApproval: (runId: string, choice: string, all?: boolean) => Promise<boolean>;
+  respondApproval: (runId: string, approvalId: string, choice: string, all?: boolean) => Promise<boolean>;
   /** 回传 Hermes 原生澄清回答。 */
   respondClarify: (runId: string, requestId: string, answer: string) => Promise<boolean>;
   /** 派生：Thread 的所有消息 */
@@ -933,6 +955,20 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   runIdsByThreadId: {},
   messagesByThreadId: {},
   toolCardsByThreadId: {},
+  workflowsByRun: {},
+  setWorkflow: (runId, snapshot) => set((state) => {
+    const current = state.workflowsByRun[runId];
+    if (snapshot && (snapshot.runId !== runId || (current && snapshot.sequence < current.sequence))) return {};
+    const next = { ...state.workflowsByRun };
+    if (snapshot) next[runId] = snapshot; else delete next[runId];
+    if (!snapshot) return { workflowsByRun: next };
+    const status: AgentThread['status'] = snapshot.locked ? 'running'
+      : snapshot.state === 'succeeded' ? 'completed'
+      : snapshot.state === 'cancelled' ? 'cancelled' : 'failed';
+    const update = (thread: AgentThread) => thread.id === snapshot.threadId && thread.latestRunId === runId && thread.status !== status
+      ? { ...thread, status } : thread;
+    return { workflowsByRun: next, threads: state.threads.map(update), historyThreads: state.historyThreads.map(update) };
+  }),
   runningRunByThreadId: {},
   historyLoadingByThreadId: {},
   resumingRunByThreadId: {},
@@ -950,6 +986,8 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         { projectId: projectId ?? null, scope }
       );
       if (result.success) {
+        const responses = await listTextResponses(projectId ?? null, scope).catch(() => existing.filter(t => t.conversationKind === 'response' && t.projectId === (projectId ?? null)));
+        result.data = [...result.data, ...responses.filter(t => t.conversationKind === 'response')].sort((a, b) => b.updatedAt - a.updatedAt);
         set((state) =>
           scope === 'history'
             ? {
@@ -994,6 +1032,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   closeThread: async (threadId, projectId) => {
     try {
+      if (isResponseConversation(threadId)) {
+        await responseAction(threadId, projectId ?? null, 'close');
+        await Promise.all([get().loadThreads(projectId, 'active'), get().loadThreads(projectId, 'history')]);
+        set({ selectedThreadId: null });
+        return true;
+      }
       const result = await invoke<{ success: boolean; data: boolean; error: string | null }>(
         'agent_thread_close',
         { threadId }
@@ -1020,6 +1064,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   reopenThread: async (threadId, projectId) => {
     try {
+      if (isResponseConversation(threadId)) {
+        await responseAction(threadId, projectId ?? null, 'reopen');
+        await Promise.all([get().loadThreads(projectId, 'active'), get().loadThreads(projectId, 'history')]);
+        set({ selectedThreadId: threadId });
+        return true;
+      }
       const result = await invoke<{ success: boolean; error: string | null }>('agent_thread_reopen', {
         threadId,
       });
@@ -1041,6 +1091,12 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   archiveThread: async (threadId, projectId) => {
     try {
+      if (isResponseConversation(threadId)) {
+        await responseAction(threadId, projectId ?? null, 'archive');
+        await Promise.all([get().loadThreads(projectId, 'active'), get().loadThreads(projectId, 'history')]);
+        set({ selectedThreadId: null });
+        return true;
+      }
       const result = await invoke<{ success: boolean; error: string | null }>('agent_thread_archive', {
         threadId,
       });
@@ -1099,6 +1155,13 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   setThreadPinned: async (threadId, pinned) => {
     try {
+      if (isResponseConversation(threadId)) {
+        const thread = [...get().threads, ...get().historyThreads].find(t => t.id === threadId);
+        if (!thread) return false;
+        await responseAction(threadId, thread.projectId, 'pin', String(pinned));
+        await Promise.all([get().loadThreads(thread.projectId ?? undefined), get().loadThreads(thread.projectId ?? undefined, 'history')]);
+        return true;
+      }
       const result = await invoke<{ success: boolean; error: string | null }>('agent_thread_pin', {
         threadId,
         pinned,
@@ -1119,6 +1182,13 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   setThreadCollection: async (threadId, collectionId) => {
     try {
+      if (isResponseConversation(threadId)) {
+        const thread = [...get().threads, ...get().historyThreads].find(t => t.id === threadId);
+        if (!thread) return false;
+        await responseAction(threadId, thread.projectId, 'collection', collectionId);
+        await Promise.all([get().loadThreads(thread.projectId ?? undefined), get().loadThreads(thread.projectId ?? undefined, 'history')]);
+        return true;
+      }
       const result = await invoke<{ success: boolean; error: string | null }>(
         'agent_thread_set_collection',
         { threadId, collectionId }
@@ -1147,6 +1217,56 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
   },
 
+  pendingSubmissions: readPendingSubmissions(),
+  submissionMonitors: {},
+  setSubmission: (key, pending) => {
+    const next = { ...get().pendingSubmissions };
+    if (pending) next[key] = pending; else delete next[key];
+    savePendingSubmissions(next);
+    set({ pendingSubmissions: next });
+  },
+  cancelSubmission: async (key) => {
+    const pending = get().pendingSubmissions[key];
+    if (!pending) return;
+    get().setSubmission(key, { ...pending, cancelRequested: true });
+    try {
+      const snapshot = pending.snapshot ?? await findSubmission(pending.clientRequestId);
+      const cancelled = await cancelSubmission(snapshot.submissionId);
+      const latest = get().pendingSubmissions[key];
+      if (latest?.clientRequestId === pending.clientRequestId) get().setSubmission(key, { ...latest, snapshot: cancelled });
+    } catch {
+      const latest = get().pendingSubmissions[key];
+      if (latest) get().setSubmission(key, { ...latest, error: '停止尚未确认，请查询任务状态' });
+    }
+  },
+  recoverSubmission: async (key) => {
+    if (get().submissionMonitors[key]) return null;
+    set((state) => ({ submissionMonitors: { ...state.submissionMonitors, [key]: true } }));
+    try {
+      const snapshot = await observeSubmission(() => get().pendingSubmissions[key], (pending) => get().setSubmission(key, pending));
+      if (!snapshot) { set({ lastStartError: '提交状态尚未确认，请查询任务状态' }); return null; }
+      if (snapshot.runId && snapshot.threadId) {
+        const run = await get().loadRunSnapshot(snapshot.runId);
+        const authoritativeStatus = run && isTerminalRunStatus(run.runStatus) ? run.runStatus : snapshot.state;
+        const terminalStatus: ThreadStatus | undefined = authoritativeStatus === 'succeeded' || authoritativeStatus === 'completed'
+          ? 'completed'
+          : authoritativeStatus === 'failed' || authoritativeStatus === 'interrupted'
+            ? 'failed'
+            : authoritativeStatus === 'cancelled' ? 'cancelled' : undefined;
+        if (!terminalStatus) {
+          set((state) => ({ resumingRunByThreadId: { ...state.resumingRunByThreadId, [snapshot.threadId!]: snapshot.runId! } }));
+          void get().reconcileRecoveredRun(snapshot.threadId, snapshot.runId);
+        }
+        get().setSubmission(key, null);
+        return { threadId: snapshot.threadId, runId: snapshot.runId, engine: snapshot.selectedEngine ?? undefined, terminalStatus };
+      }
+      set({ lastStartError: snapshot.message ?? (snapshot.state === 'cancelled' ? '任务已停止，输入已保留' : '任务准备失败，请检查模型与运行时设置') });
+      // Keep only the terminal identity across restart; draft content stays in Rust.
+      return null;
+    } finally {
+      set((state) => { const next = { ...state.submissionMonitors }; delete next[key]; return { submissionMonitors: next }; });
+    }
+  },
   lastStartError: null,
   startRun: async (
     threadId,
@@ -1163,8 +1283,13 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     workspaceRoot,
     workspacePermissionMode = 'ask',
     engine,
+    automatic = false,
+    readOnlyCollaboration = false,
   ) => {
     set({ lastStartError: null });
+    if (threadId && Object.values(get().workflowsByRun).some((w) => w.threadId === threadId && w.locked)) {
+      set({ lastStartError: "协作任务尚未结束，请先查询或停止" }); return null;
+    }
     // ISSUE-019：同一 Thread 的历史仍在恢复或上一轮尚未终态时，状态层硬拒
     // 下一轮。不能只依赖 Composer disabled，否则快捷键/异步竞态仍可绕过。
     if (
@@ -1173,6 +1298,11 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         get().runningRunByThreadId[threadId] != null ||
         get().resumingRunByThreadId[threadId] != null)
     ) {
+      return null;
+    }
+    const submissionKey = submissionScopeKey(threadId, projectId, focusDocument?.articleId ?? selection?.articleId);
+    if (automatic && get().pendingSubmissions[submissionKey] && !recoverableSubmission(get().pendingSubmissions[submissionKey])) {
+      set({ lastStartError: '上一条提交尚未确认，请先查询或停止该任务' });
       return null;
     }
     // 创建 Tauri Channel 接收事件流
@@ -1226,14 +1356,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     };
 
     try {
-      const result = await invoke<{
-        success: boolean;
-        data: { threadId: string; runId: string };
-        error: string | null;
-      }>(
-        'agent_run_start',
-        {
-          request: {
+      const request = {
             message,
             threadId,
             projectId: projectId ?? null,
@@ -1252,11 +1375,39 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             includeProjectContext,
             workspaceRoot: workspaceRoot ?? null,
             workspacePermissionMode,
+            ...(readOnlyCollaboration ? { readOnlyCollaboration: true } : {}),
             engine: engine ?? null,
-          },
-          onEvent: channel,
+          };
+      let actualEngine = engine;
+      let confirmedTerminalStatus: ThreadStatus | undefined;
+      let result: { success: boolean; data: { threadId: string; runId: string }; error: string | null };
+      if (automatic) {
+        const { engine: _engine, provider: _provider, system: _system, ...input } = request;
+        const previousRecovery = get().pendingSubmissions[submissionKey];
+        const submission = createAutomaticSubmission(input);
+        get().setSubmission(submissionKey, { clientRequestId: submission.clientRequestId, snapshot: null, cancelRequested: false });
+        try {
+          const snapshot = await startAutomaticSubmission(submission, channel);
+          const pending = get().pendingSubmissions[submissionKey];
+          if (pending) get().setSubmission(submissionKey, { ...pending, snapshot });
+        } catch (error) {
+          if (error instanceof SubmissionRejected) {
+            get().setSubmission(submissionKey, previousRecovery ?? null);
+            set({ lastStartError: error.message });
+            flushPendingEvents();
+            return null;
+          }
+          const pending = get().pendingSubmissions[submissionKey];
+          if (pending) get().setSubmission(submissionKey, { ...pending, error: String(error) });
         }
-      );
+        const claimed = await get().recoverSubmission(submissionKey);
+        if (!claimed) { flushPendingEvents(); return null; }
+        actualEngine = claimed.engine;
+        confirmedTerminalStatus = claimed.terminalStatus;
+        result = { success: true, data: claimed, error: null };
+      } else {
+        result = await invoke('agent_run_start', { request, onEvent: channel });
+      }
 
       if (!result.success) {
         flushPendingEvents();
@@ -1279,21 +1430,21 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           event.payload.type === 'run_failed' ||
           event.payload.type === 'run_cancelled'
         );
-        const alreadyTerminal = terminalEvent != null;
+        const alreadyTerminal = terminalEvent != null || confirmedTerminalStatus != null;
         const threadStatus: ThreadStatus = terminalEvent?.payload.type === 'run_failed'
           ? 'failed'
           : terminalEvent?.payload.type === 'run_cancelled'
             ? 'cancelled'
             : terminalEvent?.payload.type === 'run_completed'
               ? 'completed'
-              : 'running';
+              : confirmedTerminalStatus ?? 'running';
         const now = Date.now();
         const existingThread = state.threads.find((item) => item.id === result.data.threadId);
         const threads = existingThread
           ? state.threads.map((item) => item.id === result.data.threadId
             ? {
                 ...item,
-                engine: engine ?? item.engine ?? 'hermes',
+                engine: actualEngine ?? item.engine ?? 'hermes',
                 status: threadStatus,
                 latestRunId: result.data.runId,
                 updatedAt: now,
@@ -1303,7 +1454,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
               ...state.threads,
               {
                 id: result.data.threadId,
-                engine: engine ?? 'hermes',
+                engine: actualEngine ?? 'hermes',
                 title: '新会话',
                 status: threadStatus,
                 projectId: projectId ?? null,
@@ -1317,7 +1468,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         return {
           threads,
           runningRunByThreadId: alreadyTerminal
-            ? state.runningRunByThreadId
+            ? Object.fromEntries(Object.entries(state.runningRunByThreadId).filter(([id, run]) => id !== result.data.threadId || run !== result.data.runId))
             : {
                 ...state.runningRunByThreadId,
                 [result.data.threadId]: result.data.runId,
@@ -1826,11 +1977,11 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
   },
 
-  respondApproval: async (runId, choice, all = false) => {
+  respondApproval: async (runId, approvalId, choice, all = false) => {
     try {
       const result = await invoke<{ success: boolean; data: boolean; error: string | null }>(
         'agent_run_approval_respond',
-        { runId, choice, all }
+        { runId, approvalId, choice, all }
       );
       return result.success && result.data;
     } catch (error) {

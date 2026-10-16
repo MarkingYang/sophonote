@@ -21,10 +21,11 @@ use tokio_util::sync::CancellationToken;
 struct Capture(Mutex<Vec<AgentEvent>>);
 impl EventTransport for Capture {
     fn send(&self, event: AgentEvent) -> Result<(), String> {
-        if matches!(event.payload, AgentEventPayload::ApprovalRequired { .. }) {
+        if let AgentEventPayload::ApprovalRequired { approval_id, .. } = &event.payload {
             crate::agent::hermes::gateway_client::send_run_control(
                 &event.run_id,
                 crate::agent::hermes::gateway_client::GatewayControl::Approval {
+                    approval_id: approval_id.clone(),
                     choice: "once".into(),
                     all: false,
                 },
@@ -58,7 +59,33 @@ fn stream(tool: Option<Value>, text: &str) -> String {
     )
 }
 
+fn anthropic_stream(tool: Option<Value>, text: &str) -> String {
+    let message = json!({"id":format!("msg_{}",uuid::Uuid::new_v4()),"type":"message","role":"assistant","model":"fixture-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":90,"cache_read_input_tokens":10,"output_tokens":0}});
+    let mut frames = vec![json!({"type":"message_start","message":message})];
+    if let Some(tool) = &tool {
+        frames.push(json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":format!("tool_{}",uuid::Uuid::new_v4()),"name":tool["name"],"input":{}}}));
+        frames.push(json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":tool["input"].to_string()}}));
+    } else {
+        frames.push(json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}));
+        frames.push(json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}}));
+    }
+    frames.push(json!({"type":"content_block_stop","index":0}));
+    frames.push(json!({"type":"message_delta","delta":{"stop_reason":if tool.is_some() { "tool_use" } else { "end_turn" },"stop_sequence":null},"usage":{"output_tokens":20}}));
+    frames.push(json!({"type":"message_stop"}));
+    frames
+        .iter()
+        .map(|frame| {
+            format!(
+                "event: {}\ndata: {frame}\n\n",
+                frame["type"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
 struct Fixture {
+    protocol: &'static str,
+    page_url: String,
     requests: Mutex<Vec<Value>>,
     cancellation_ready: tokio::sync::Notify,
 }
@@ -67,15 +94,32 @@ async fn model(
     fixture: Arc<Fixture>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let path = request.uri().path().to_string();
-    if !path.starts_with("/v1/chat/completions") {
+    let anthropic = fixture.protocol == "anthropic";
+    let expected_path = if anthropic {
+        "/v1/messages"
+    } else {
+        "/v1/chat/completions"
+    };
+    if !path.starts_with(expected_path) {
         return Ok(Response::builder()
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from("{}")))
             .unwrap());
     }
     assert_eq!(
-        request.headers().get("authorization").unwrap(),
-        "Bearer fixture-secret"
+        request
+            .headers()
+            .get(if anthropic {
+                "x-api-key"
+            } else {
+                "authorization"
+            })
+            .unwrap(),
+        if anthropic {
+            "fixture-secret"
+        } else {
+            "Bearer fixture-secret"
+        }
     );
     let body = request.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&body).unwrap();
@@ -90,14 +134,23 @@ async fn model(
         requests.push(body);
         requests.len() - 1
     };
+    let response_stream = |tool, text| {
+        if anthropic {
+            anthropic_stream(tool, text)
+        } else {
+            stream(tool, text)
+        }
+    };
     let data = match index {
-        0 => stream(Some(json!({"name":"sophonote_write","input":{"path":"output.txt","content":"native OpenCode fixture"}})), ""),
-        1 => stream(None, "first complete"),
-        2 => stream(Some(json!({"name":"sophonote_read","input":{"path":"output.txt"}})), ""),
-        3 => stream(None, "history complete"),
-        4 => stream(Some(json!({"name":"sophonote_write","input":{"path":"denied.txt","content":"must not exist"}})), ""),
-        5 => stream(None, "plan denied"),
-        6 => return Ok(Response::builder().status(400).header("content-type","application/json").body(Full::new(Bytes::from("{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"fixture rejected\"}}"))).unwrap()),
+        0 => response_stream(Some(json!({"name":"sophonote_write","input":{"path":"output.txt","content":"native OpenCode fixture"}})), ""),
+        1 => response_stream(None, "first complete"),
+        2 => response_stream(Some(json!({"name":"sophonote_read","input":{"path":"output.txt"}})), ""),
+        3 => response_stream(None, "history complete"),
+        4 => response_stream(Some(json!({"name":"sophonote_write","input":{"path":"denied.txt","content":"must not exist"}})), ""),
+        5 => response_stream(None, "plan denied"),
+        6 => response_stream(Some(json!({"name":"sophonote_webfetch","input":{"url":fixture.page_url}})), ""),
+        7 => response_stream(None, "web complete"),
+        8 => return Ok(Response::builder().status(400).header("content-type","application/json").body(Full::new(Bytes::from("{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"fixture rejected\"}}"))).unwrap()),
         _ => { fixture.cancellation_ready.notify_one(); std::future::pending::<()>().await; unreachable!() },
     };
     Ok(Response::builder()
@@ -109,6 +162,16 @@ async fn model(
 #[tokio::test]
 #[ignore = "requires pnpm opencode:bundle; uses a local HTTP fixture, never a real provider"]
 async fn native_opencode_tools_history_plan_error_and_cancel() {
+    native_protocol_contract("openai").await;
+}
+
+#[tokio::test]
+#[ignore = "requires bundled OpenCode; exercises Anthropic through a local HTTP fixture"]
+async fn native_opencode_anthropic_tools_history_plan_error_and_cancel() {
+    native_protocol_contract("anthropic").await;
+}
+
+async fn native_protocol_contract(protocol: &'static str) {
     let runtime = runtime::verify(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources/opencode")
@@ -122,7 +185,10 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
     let root = root.canonicalize().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let web = crate::agent::web::tests::fixture().await;
     let fixture = Arc::new(Fixture {
+        protocol,
+        page_url: format!("{}/page", web.0),
         requests: Mutex::new(vec![]),
         cancellation_ready: tokio::sync::Notify::new(),
     });
@@ -155,7 +221,7 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
         runtime: ExecutionRuntime::OpenCode(runtime),
         provider: crate::model::openai_compat::ProviderSnapshot {
             id: "fixture".into(),
-            protocol: "openai".into(),
+            protocol: protocol.into(),
             base_url: format!("{endpoint}/v1"),
             model: "fixture-model".into(),
             models: vec!["fixture-model".into()],
@@ -169,6 +235,8 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
         prompt: "Write the fixture file".into(),
         images: vec![],
         scope: tools::Scope {
+            read_lease: None,
+            readonly: None,
             workspace: root.clone(),
             read_paths: vec![],
             workcopy: None,
@@ -230,7 +298,10 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
     assert_eq!(usage["summary"]["totalTokens"], 480);
     assert_eq!(usage["summary"]["cacheReadTokens"], 40);
     assert_eq!(usage["summary"]["outputTokens"], 80);
-    assert_eq!(usage["summary"]["reasoningTokens"], 20);
+    assert_eq!(
+        usage["summary"]["reasoningTokens"],
+        if protocol == "anthropic" { 0 } else { 20 }
+    );
     assert_eq!(usage["byModel"][0]["model"], "fixture-model");
     prepared.scope.mode = "plan".into();
     prepared.prompt = "Try writing another file".into();
@@ -243,6 +314,22 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
     .unwrap();
     assert_eq!(third.0, "plan denied");
     assert!(!root.join("denied.txt").exists());
+    capture.0.lock().unwrap().clear();
+    prepared.prompt = "Read the webpage in Plan mode".into();
+    let web_result = tokio::time::timeout(
+        Duration::from_secs(35),
+        transport::run(&prepared, &binding, &events, &cancel),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(web_result.0, "web complete");
+    assert!(!capture
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| matches!(e.payload, AgentEventPayload::ApprovalRequired { .. })));
     let error = tokio::time::timeout(
         Duration::from_secs(35),
         transport::run(&prepared, &binding, &events, &cancel),
@@ -276,8 +363,20 @@ async fn native_opencode_tools_history_plan_error_and_cancel() {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|tool| tool["function"]["name"].as_str())
+        .filter_map(|tool| {
+            if protocol == "anthropic" {
+                tool["name"].as_str()
+            } else {
+                tool["function"]["name"].as_str()
+            }
+        })
         .collect();
+    assert!(requests[7]["messages"]
+        .to_string()
+        .contains("WEB_FIXTURE_OK"));
+    assert!(names.contains(&"sophonote_websearch"));
+    assert!(names.contains(&"sophonote_webfetch"));
+    assert!(names.contains(&"sophonote_news_search"));
     assert!(names.contains(&"sophonote_write"));
     assert!(
         names.iter().all(|name| name.starts_with("sophonote_")),
