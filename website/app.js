@@ -68,7 +68,7 @@ async function hydrateLatestRelease() {
       /(aarch64|arm64|apple[-_ ]?silicon)/i.test(dmg.name) ? "Apple Silicon" : null,
     ].filter(Boolean);
     releaseStatuses.forEach((status) => {
-      const channel = release.prerelease ? "GitHub Community Preview" : "GitHub Release";
+      const channel = release.prerelease ? "社区预览版" : "正式发布版";
       status.textContent = `${channel} · ${details.join(" · ")}`;
     });
   } catch (error) {
@@ -111,6 +111,59 @@ function setupScrollState() {
   window.addEventListener("resize", update, { passive: true });
 }
 
+// Keep every panel readable without JavaScript. Enhance each group independently.
+function setupTabs() {
+  document.querySelectorAll("[data-tabs]").forEach((group) => {
+    const list = group.querySelector("[data-tab-list]");
+    const tabs = [...list.querySelectorAll("[data-tab]")];
+    const panels = tabs.map((tab) => document.getElementById(tab.dataset.tab));
+    if (panels.some((panel) => !panel)) return;
+    list.hidden = false;
+    list.setAttribute("role", "tablist");
+    function select(index, focus = false) {
+      tabs.forEach((tab, position) => {
+        const active = index === position;
+        tab.setAttribute("aria-selected", String(active));
+        tab.tabIndex = active ? 0 : -1;
+        panels[position].hidden = !active;
+      });
+      if (focus) tabs[index].focus();
+    }
+    tabs.forEach((tab, index) => {
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", panels[index].id);
+      panels[index].setAttribute("role", "tabpanel");
+      panels[index].setAttribute("aria-labelledby", tab.id);
+      panels[index].tabIndex = 0;
+      tab.addEventListener("click", () => select(index));
+      tab.addEventListener("keydown", (event) => {
+        let next;
+        if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+        if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") next = 0;
+        if (event.key === "End") next = tabs.length - 1;
+        if (next === undefined) return;
+        event.preventDefault();
+        select(next, true);
+      });
+    });
+    const selectHash = () => {
+      const index = panels.findIndex((panel) => `#${panel.id}` === window.location.hash);
+      if (index !== -1) select(index);
+    };
+    panels.forEach((panel, index) => {
+      document.querySelectorAll(`a[href="#${panel.id}"]`).forEach((link) => {
+        // Reveal before the browser follows the anchor, including repeated clicks.
+        link.addEventListener("click", () => select(index));
+      });
+    });
+    select(0);
+    selectHash();
+    window.addEventListener("hashchange", selectHash);
+  });
+}
+
+setupTabs();
 setupRevealAnimations();
 setupScrollState();
 hydrateLatestRelease();

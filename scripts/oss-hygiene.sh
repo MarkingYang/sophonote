@@ -24,13 +24,16 @@ rg -n --hidden --no-heading \
   . >"$tmp" || true
 if [ -s "$tmp" ]; then
   echo "secret-like pattern in working tree:" >&2
-  cat "$tmp" >&2
+  cut -d: -f1 "$tmp" | sort -u >&2
   fail=1
 fi
 
-git ls-files >"$tmp"
-rg -n \
-  -e '^(notes|workspace|runtime|hermes|logs)/' \
+git -c core.quotePath=false ls-files >"$tmp"
+rg \
+  -e '^(notes|workspace|runtime|hermes|logs|private)/' \
+  -e '(^|/)\.transcription-work/' \
+  -e '文字稿|逐字稿|面试|简历' \
+  -e '\.(wav|m4a|mp3)$' \
   -e '(^|/)(sophonote\.db|[^/]+\.(db|sqlite|sqlite3)(-[^/]*)?)$' \
   -e '(^|/)\.env($|\.)' \
   "$tmp" >"$filtered" || true
@@ -38,7 +41,7 @@ if [ -s "$filtered" ]; then
   rg -v '\.env\.hermes\.example$' "$filtered" >"$tmp" || true
   if [ -s "$tmp" ]; then
     echo "private runtime path tracked by git:" >&2
-    cat "$tmp" >&2
+    cut -d: -f1 "$tmp" | sort -u >&2
     fail=1
   fi
 fi
@@ -53,7 +56,7 @@ if [ -s "$tmp" ]; then
   rg -v '^(\./)?(CLAUDE\.md|AGENTS\.md):' "$tmp" >"$filtered" || true
   if [ -s "$filtered" ]; then
     echo "maintainer absolute path outside CLAUDE.md / AGENTS.md:" >&2
-    cat "$filtered" >&2
+    cut -d: -f1 "$filtered" | sort -u >&2
     fail=1
   fi
 fi

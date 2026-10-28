@@ -1061,7 +1061,7 @@ CI 入口为 `.github/workflows/pack.yml`：`macos-14` 打 Apple Silicon pack，
 
 - 对外宣传官网与客户端源码在同一仓库维护，站点源码固定放在 `website/`，不得覆盖根目录的 Vite `index.html`，也不得把营销站源码混入承担真相源职责的 `docs/`。
 - `sophonote.com` 是正式域名；`website/CNAME` 是 GitHub Pages 自定义域名声明，DNS 仍由域名服务商配置。Pages 只发布 `website/` 静态文件，不发布客户端构建目录、私有运行数据或本地验收截图。
-- 官网使用无框架的静态 HTML/CSS/JavaScript，保持无后端、无 Cookie、无站内账号。2026-09-19 官网更新围绕四引擎、项目任务和可选云端记忆组织内容；产品示意明确标注为示意，不复用含私人数据的宿主截图。下载显示实际 Release 版本、平台和大小，网络超时回退 Releases；安装要求与云端记忆数据流直接说明。宣传内容必须以 PRD、架构和台账为事实边界；目标能力明确标注路线图，社区预览不得描述为已签名 RC。
+- 官网使用无框架的静态 HTML/CSS/JavaScript，保持无后端、无 Cookie、无站内账号。2026-10-21 官网按用途、交互工作示例、五个功能入口、数据边界及三步开始组织内容；功能标签使用原生按钮与 tab/tabpanel 语义，方向键/Home/End 可切换；JavaScript 不可用时仍可阅读全部功能与示例。演示使用显式标注的固定范例，不发模型请求、不制造实时进度；产品示意明确标注为示意，不复用含私人数据的宿主截图。下载显示实际 Release 版本、平台和大小，网络超时回退 Releases；安装要求与云端记忆数据流直接说明。宣传内容必须以 PRD、架构和台账为事实边界；目标能力明确标注路线图，社区预览不得描述为已签名 RC。
 - macOS 下载按钮只引用 `MarkingYang/sophonote` 的 GitHub Release 资产。前端通过 GitHub Releases API 查找最新 `.dmg`，优先 Apple Silicon 资产；没有公开 Release 或请求失败时退回 Releases 页面，不伪造本地下载地址。
 - `.github/workflows/pages.yml` 负责从 `main` 部署官网；`.github/workflows/pack.yml` 在版本标签构建完成后把 DMG/NSIS 作为 GitHub prerelease 资产发布。无 Developer ID/Authenticode 的产物继续明确标为 community preview，不得标记为正式 RC。
 

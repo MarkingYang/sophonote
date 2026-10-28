@@ -71,3 +71,14 @@ src-tauri/resources/pi/
 
 # Generated pinned OpenCode standalone distributions
 src-tauri/resources/opencode/
+
+# 私人面试、转写与录音材料：仅本地保留
+.transcription-work/
+/private/
+*文字稿*
+*逐字稿*
+*面试*
+*简历*
+*.wav
+*.m4a
+*.mp3
